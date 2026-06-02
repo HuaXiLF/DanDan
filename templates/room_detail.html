@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ room.room_number }} - 房间详情{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4">
+    <!-- 返回 + 标题 -->
+    <div class="flex items-center gap-3 mb-4">
+        <a href="/rooms" class="text-gray-500 text-xl">‹</a>
+        <h1 class="text-lg font-bold">🚪 {{ room.room_number }}</h1>
+        <span class="{% if room.status == 'occupied' %}tag-green{% else %}tag-gray{% endif %}">
+            {{ '已租' if room.status == 'occupied' else '空房' }}
+        </span>
+    </div>
+
+    <!-- 房租设置 -->
+    <div class="card mb-3">
+        <form method="post" action="/rooms/{{ room.id }}/rent" class="flex items-center gap-3">
+            <label class="form-label mb-0 whitespace-nowrap text-sm">月租</label>
+            <input type="number" name="monthly_rent" step="0.01" value="{{ room.monthly_rent }}"
+                   class="form-input flex-1 text-center">
+            <button type="submit" class="btn-sm bg-primary-600 text-white rounded-lg px-4">保存</button>
+        </form>
+    </div>
+
+    <!-- 当前租约 -->
+    {% if tenancy %}
+    <div class="card mb-3">
+        <h2 class="font-bold text-sm text-gray-500 mb-2">📄 当前租约</h2>
+        <div class="space-y-2">
+            {% for t in tenancy.tenant_list %}
+            <div class="flex items-center justify-between bg-gray-50 rounded-lg p-2.5">
+                <div>
+                    <div class="font-medium">{{ t.name }}</div>
+                    <div class="text-xs text-gray-400">{{ t.phone }}</div>
+                </div>
+                <span class="text-xs text-gray-400">{{ t.id_number }}</span>
+            </div>
+            {% endfor %}
+            <div class="flex justify-between text-sm text-gray-500 pt-1">
+                <span>类型: {{ {'monthly':'月租','yearly':'年租','weekly':'周租'}[tenancy.lease_type] }}</span>
+                <span>押金: {{ "%.0f"|format(tenancy.deposit) }}元</span>
+            </div>
+            <div class="flex justify-between text-sm text-gray-500">
+                <span>起: {{ tenancy.start_date }}</span>
+                <span>止: {{ tenancy.end_date or '未定' }}</span>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 水电费 -->
+    <div class="card mb-3">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="font-bold text-sm text-gray-500">⚡ 水电费</h2>
+            <a href="/utilities" class="text-xs text-primary-600">查看全部</a>
+        </div>
+        {% if bills %}
+        <div class="space-y-1">
+            {% for b in bills[:5] %}
+            <div class="flex justify-between text-sm py-1.5 border-b border-gray-50 last:border-0">
+                <span class="text-gray-600">{{ b.month }}</span>
+                <span class="{% if b.paid %}text-green-600{% else %}text-red-500{% endif %}">
+                    {{ "%.0f"|format(b.total) }}元
+                    {% if b.paid %}<span class="text-green-500 text-[10px]">已缴</span>{% else %}待缴{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-400 text-sm text-center py-3">暂无水电费记录</p>
+        {% endif %}
+    </div>
+
+    <!-- 维修记录 -->
+    <div class="card mb-6">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="font-bold text-sm text-gray-500">🔧 维修记录</h2>
+            <a href="/repairs" class="text-xs text-primary-600">查看全部</a>
+        </div>
+        {% if repairs %}
+        <div class="space-y-1">
+            {% for r in repairs[:5] %}
+            <div class="flex justify-between text-sm py-1.5 border-b border-gray-50 last:border-0">
+                <span class="text-gray-600 truncate max-w-[200px]">{{ r.description }}</span>
+                <span class="{% if r.status == 'completed' %}tag-green{% else %}tag-yellow{% endif %} text-[10px] px-1.5 py-0.5">
+                    {{ '已处理' if r.status == 'completed' else '待处理' }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-400 text-sm text-center py-3">暂无维修记录</p>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
