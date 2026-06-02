@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}新增租客{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4">
+    <div class="flex items-center gap-3 mb-4">
+        <a href="/tenants" class="text-gray-500 text-xl">‹</a>
+        <h1 class="text-lg font-bold">新增租客</h1>
+    </div>
+
+    <form method="post" action="/tenants/create" class="space-y-4">
+        <div>
+            <label class="form-label">姓名 *</label>
+            <input type="text" name="name" required class="form-input" placeholder="请输入姓名">
+        </div>
+        <div>
+            <label class="form-label">身份证号</label>
+            <input type="text" name="id_number" class="form-input" placeholder="选填">
+        </div>
+        <div>
+            <label class="form-label">联系电话</label>
+            <input type="tel" name="phone" class="form-input" placeholder="选填">
+        </div>
+        <button type="submit" class="btn-primary mt-4">保存</button>
+    </form>
+</div>
+
+{% endblock %}
