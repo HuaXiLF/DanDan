@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1e40af">
+    <title>{% block title %}出租屋管理{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a' },
+                    }
+                }
+            }
+        }
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; }
+        body { overscroll-behavior: none; }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
+        .active-tab { @apply text-primary-600 border-t-2 border-primary-600; }
+        .slide-up { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100%); opacity:0 } to { transform: translateY(0); opacity:1 } }
+        .badge { @apply inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-xs font-bold text-white bg-red-500 rounded-full; }
+        input, select, textarea { @apply text-base; }
+        .card { @apply bg-white rounded-xl shadow-sm border border-gray-100 p-4; }
+        .stat-card { @apply card text-center; }
+        .stat-value { @apply text-2xl font-bold text-primary-700; }
+        .stat-label { @apply text-xs text-gray-500 mt-1; }
+        .btn { @apply w-full py-3 px-4 rounded-xl font-medium text-center transition-all active:scale-[0.98]; }
+        .btn-primary { @apply btn bg-primary-600 text-white hover:bg-primary-700; }
+        .btn-secondary { @apply btn bg-gray-100 text-gray-700 hover:bg-gray-200; }
+        .btn-danger { @apply btn bg-red-500 text-white hover:bg-red-600; }
+        .btn-sm { @apply py-2 px-3 text-sm rounded-lg; }
+        .form-input { @apply w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all; }
+        .form-label { @apply block text-sm font-medium text-gray-600 mb-1.5; }
+        .tag { @apply inline-block px-2.5 py-1 text-xs rounded-full font-medium; }
+        .tag-green { @apply tag bg-green-100 text-green-700; }
+        .tag-red { @apply tag bg-red-100 text-red-700; }
+        .tag-yellow { @apply tag bg-yellow-100 text-yellow-700; }
+        .tag-blue { @apply tag bg-blue-100 text-blue-700; }
+        .tag-gray { @apply tag bg-gray-100 text-gray-600; }
+
+        /* 底部导航栏 */
+        .nav-bar {
+            @apply fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50 safe-bottom;
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-start;
+            padding-top: 6px;
+        }
+        .nav-item {
+            @apply flex flex-col items-center justify-center py-1 px-2;
+            flex: 1;
+            min-width: 0;
+        }
+        .nav-icon { @apply text-xl mb-0.5; }
+        .nav-label { @apply text-[10px] text-gray-400 leading-tight; }
+        .nav-item.active .nav-label { @apply text-primary-600 font-semibold; }
+        .nav-item.active .nav-icon { @apply text-primary-600; }
+
+        /* 主内容区 */
+        .main-content { padding-bottom: 70px; }
+        .page-header { @apply sticky top-0 bg-gray-50 z-30 py-3 px-4 border-b border-gray-100; }
+        .page-title { @apply text-lg font-bold text-gray-800; }
+
+        /* Toast */
+        .toast { @apply fixed top-4 left-4 right-4 z-[100] bg-gray-800 text-white text-center py-3 px-4 rounded-xl text-sm shadow-lg; animation: fadeInOut 2.5s ease forwards; }
+        @keyframes fadeInOut { 0%{opacity:0;transform:translateY(-20px)} 15%{opacity:1;transform:translateY(0)} 85%{opacity:1} 100%{opacity:0;transform:translateY(-20px)} }
+
+        /* 模态框 */
+        .modal-overlay { @apply fixed inset-0 bg-black/50 z-50 flex items-end justify-center; }
+        .modal-content { @apply bg-white rounded-t-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 slide-up; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans antialiased h-full">
+
+{% block body %}
+<div class="main-content">
+    {% block content %}{% endblock %}
+</div>
+
+<!-- 底部导航 -->
+<nav class="nav-bar">
+    <a href="/" class="nav-item {% if request.url.path == '/' %}active{% endif %}">
+        <span class="nav-icon">🏠</span>
+        <span class="nav-label">首页</span>
+    </a>
+    <a href="/rooms" class="nav-item {% if request.url.path.startswith('/rooms') %}active{% endif %}">
+        <span class="nav-icon">🚪</span>
+        <span class="nav-label">房间</span>
+    </a>
+    <a href="/leases" class="nav-item {% if request.url.path.startswith('/leases') %}active{% endif %}">
+        <span class="nav-icon">📄</span>
+        <span class="nav-label">租约</span>
+    </a>
+    <a href="/payments" class="nav-item {% if request.url.path.startswith('/payments') %}active{% endif %}">
+        <span class="nav-icon">💰</span>
+        <span class="nav-label">收租</span>
+    </a>
+    <a href="/finance" class="nav-item {% if request.url.path.startswith('/finance') %}active{% endif %}">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">报表</span>
+    </a>
+</nav>
+{% endblock %}
+
+<script>
+// Toast提示
+function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2600);
+}
+{% with messages = get_flashed_messages() %}
+{% if messages %}
+document.addEventListener('DOMContentLoaded', function() {
+    {% for msg in messages %}
+    showToast('{{ msg }}');
+    {% endfor %}
+});
+{% endif %}
+{% endwith %}
+</script>
+</body>
+</html>
