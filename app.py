@@ -12,64 +12,152 @@ import streamlit as st
 st.set_page_config(page_title="出租屋管理站", page_icon="🏠", layout="wide",
                    initial_sidebar_state="collapsed")
 
-# ── CSS 定制（手机端优化） ──
+# ── CSS 设计系统（移动端优先） ──
 st.markdown("""
 <style>
-    /* 隐藏 Streamlit 默认元素 */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stApp {margin-top: -60px; padding-top: 0;}
-    .block-container {padding-top: 0.5rem; padding-bottom: 0.5rem; max-width: 100%;}
+    /* === Reset & 基础 === */
+    #MainMenu, footer, header {display: none !important;}
+    .stApp {margin-top: -80px; padding-top: 0; background: #f5f6fa;}
+    .block-container {padding: 0 12px 90px !important; max-width: 480px !important; margin: 0 auto;}
+    div[data-testid="stVerticalBlock"] > div {gap: 6px;}
+    .st-emotion-cache-1y4p8pa {padding: 1rem 0;}
+    .row-widget.stButton {margin: 0;}
 
-    /* 导航标签 */
-    .nav-tabs {display: flex; overflow-x: auto; gap: 4px; padding: 4px 0; margin-bottom: 8px;
-               -webkit-overflow-scrolling: touch; scrollbar-width: none;}
-    .nav-tabs::-webkit-scrollbar {display: none;}
-    .nav-tab {flex-shrink: 0; padding: 8px 14px; border-radius: 10px; font-size: 13px;
-              font-weight: 500; white-space: nowrap; cursor: pointer; border: none;
-              background: #f3f4f6; color: #6b7280; transition: all 0.15s;}
-    .nav-tab.active {background: #1e40af; color: white;}
-    .nav-tab:active {transform: scale(0.95);}
+    /* === 顶部渐变标题 === */
+    .app-header {
+        background: linear-gradient(135deg, #1a237e 0%, #283593 40%, #3949ab 100%);
+        color: white; border-radius: 0 0 24px 24px; padding: 24px 20px 20px;
+        margin: -12px -12px 16px; position: relative; overflow: hidden;
+    }
+    .app-header::before {
+        content: ''; position: absolute; top: -50%; right: -30%; width: 200px; height: 200px;
+        background: rgba(255,255,255,0.05); border-radius: 50%;
+    }
+    .app-header::after {
+        content: ''; position: absolute; bottom: -20%; left: -10%; width: 120px; height: 120px;
+        background: rgba(255,255,255,0.04); border-radius: 50%;
+    }
+    .app-header h1 {font-size: 20px; font-weight: 700; margin: 0; position: relative; z-index: 1;}
+    .app-header p {font-size: 12px; opacity: 0.75; margin: 2px 0 0; position: relative; z-index: 1;}
+    .header-stat-row {display: flex; gap: 8px; margin-top: 14px; position: relative; z-index: 1;}
+    .header-stat {background: rgba(255,255,255,0.12); backdrop-filter: blur(8px);
+                  border-radius: 12px; padding: 10px 12px; flex: 1; text-align: center;}
+    .header-stat .num {font-size: 22px; font-weight: 700; line-height: 1.2;}
+    .header-stat .lbl {font-size: 10px; opacity: 0.7; margin-top: 2px;}
 
-    /* 卡片 */
-    .card {background: white; border-radius: 14px; padding: 14px; margin-bottom: 10px;
-           box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-           border: 1px solid #f3f4f6;}
-    .card-title {font-size: 13px; color: #6b7280; margin-bottom: 6px; font-weight: 500;}
-    .card-value {font-size: 22px; font-weight: 700; color: #1e3a8a;}
-    .stat-grid {display: grid; gap: 8px; margin-bottom: 12px;}
+    /* === 底部导航栏 === */
+    .bottom-nav {
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 999;
+        background: white; border-top: 1px solid #e8eaef;
+        padding: 6px 0 max(6px, env(safe-area-inset-bottom, 6px));
+        display: flex; justify-content: space-around; box-shadow: 0 -2px 12px rgba(0,0,0,0.06);
+    }
+    .nav-item {
+        display: flex; flex-direction: column; align-items: center; gap: 1px;
+        flex: 1; max-width: 72px; cursor: pointer; border: none; background: none;
+        padding: 4px 0; transition: all 0.15s; -webkit-tap-highlight-color: transparent;
+    }
+    .nav-item .icon {font-size: 20px; line-height: 1;}
+    .nav-item .label {font-size: 9px; color: #9ca3af; font-weight: 500; transition: color 0.15s;}
+    .nav-item.active .label {color: #1a237e; font-weight: 600;}
+    .nav-item.active .icon {transform: scale(1.05);}
+    .nav-item:active {transform: scale(0.92);}
 
-    /* 房间格子 */
-    .room-grid {display: grid; gap: 6px;}
-    .room-cell {padding: 8px 4px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: 600;
-                cursor: pointer; border: 1px solid #e5e7eb; text-decoration: none; display: block;}
+    /* === 卡片系统 === */
+    .card {
+        background: white; border-radius: 16px; padding: 16px; margin-bottom: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);
+        transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .card:active {transform: scale(0.99);}
+    .stat-card {text-align: center; padding: 14px 8px;}
+    .stat-card .val {font-size: 24px; font-weight: 800; letter-spacing: -0.5px;}
+    .stat-card .lbl {font-size: 11px; color: #9ca3af; margin-top: 2px;}
+
+    /* 进度条卡片 */
+    .progress-card {background: white; border-radius: 16px; padding: 16px; margin-bottom: 10px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);}
+    .progress-header {display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;}
+    .progress-header .title {font-size: 13px; color: #6b7280; font-weight: 500;}
+    .progress-header .amount {font-size: 18px; font-weight: 700;}
+    .progress-header .amount .paid {color: #059669;}
+    .progress-header .amount .sep {color: #d1d5db; margin: 0 3px;}
+    .progress-header .amount .total {color: #1a237e;}
+    .progress-bar {height: 6px; background: #e5e7eb; border-radius: 99px; overflow: hidden;}
+    .progress-fill {height: 100%; background: linear-gradient(90deg, #059669, #10b981);
+                    border-radius: 99px; transition: width 0.5s ease;}
+
+    /* === 房间网格 === */
+    .floor-label {font-size: 14px; font-weight: 600; color: #374151; margin: 12px 0 6px; display: flex;
+                  align-items: center; gap: 6px; padding: 0 2px;}
+    .room-grid {display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px;}
+    .room-cell {
+        border-radius: 12px; padding: 10px 2px; text-align: center; font-size: 12px; font-weight: 600;
+        cursor: pointer; border: 1.5px solid; transition: all 0.12s;
+        -webkit-tap-highlight-color: transparent; text-decoration: none; display: block;
+    }
+    .room-cell:active {transform: scale(0.93);}
     .room-cell.occupied {background: #ecfdf5; border-color: #a7f3d0; color: #065f46;}
-    .room-cell.vacant {background: #f9fafb; border-color: #e5e7eb; color: #9ca3af;}
+    .room-cell.vacant {background: #f9fafb; border-color: #e5e7eb; color: #b0b7c3;}
+    .room-cell .dot {display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+                     margin-top: 3px;}
+    .room-cell.occupied .dot {background: #059669;}
+    .room-cell.vacant .dot {background: #d1d5db;}
 
-    /* 标记 */
-    .badge {display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500;}
-    .badge-green {background: #d1fae5; color: #065f46;}
-    .badge-red {background: #fee2e2; color: #991b1b;}
-    .badge-yellow {background: #fef3c7; color: #92400e;}
-    .badge-blue {background: #dbeafe; color: #1e40af;}
-    .badge-gray {background: #f3f4f6; color: #6b7280;}
+    /* === 标记 === */
+    .tag {display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: 0.3px;}
+    .tag-green {background: #d1fae5; color: #065f46;}
+    .tag-red {background: #fee2e2; color: #991b1b;}
+    .tag-yellow {background: #fef3c7; color: #92400e;}
+    .tag-blue {background: #dbeafe; color: #1a237e;}
+    .tag-gray {background: #f3f4f6; color: #6b7280;}
 
-    /* 表单按钮 */
-    .stButton button {width: 100%; border-radius: 10px; padding: 8px 0; font-size: 14px; font-weight: 500;}
-    .stTextInput input, .stSelectbox div, .stDateInput input, .stNumberInput input {
-        border-radius: 10px !important; font-size: 14px !important;}
-    div[data-testid="stForm"] {border: none !important; padding: 0 !important;}
+    /* === Styled 表单元素 === */
+    .stButton button {
+        width: 100%; border-radius: 12px !important; padding: 12px 0 !important;
+        font-size: 14px !important; font-weight: 600 !important;
+        transition: all 0.12s !important; border: none !important;
+    }
+    .stButton button:active {transform: scale(0.96) !important;}
+    .stButton button[kind="primary"] {background: linear-gradient(135deg, #1a237e, #3949ab) !important; color: white !important;}
+    .stTextInput input, .stSelectbox > div, .stDateInput input, .stNumberInput input {
+        border-radius: 12px !important; border: 1.5px solid #e5e7eb !important;
+        font-size: 14px !important; padding: 12px 14px !important;
+        background: #f9fafb !important; transition: all 0.12s !important;
+    }
+    .stTextInput input:focus, .stSelectbox > div:focus, .stDateInput input:focus, .stNumberInput input:focus {
+        border-color: #3949ab !important; background: white !important; box-shadow: 0 0 0 3px rgba(57,73,171,0.1) !important;
+    }
+    div[data-testid="stForm"] {border: none !important; padding: 0 !important; background: none !important;}
+    div[data-testid="stForm"] > div {gap: 10px;}
+    .stSelectbox > div > div {padding: 8px 12px !important;}
+    .stMultiSelect > div {border-radius: 12px !important; border: 1.5px solid #e5e7eb !important;}
 
-    /* 弹窗覆盖 */
-    .modal-overlay {position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1000;
-                    display: flex; align-items: flex-end; justify-content: center;}
-    .modal-content {background: white; border-radius: 20px 20px 0 0; width: 100%; max-width: 500px;
-                    max-height: 85vh; overflow-y: auto; padding: 20px; animation: slideUp 0.25s ease;}
-    @keyframes slideUp {from {transform: translateY(100%);} to {transform: translateY(0);}}
+    /* === 分割线 === */
+    hr {margin: 8px 0 !important; border-color: #f0f0f5 !important;}
 
-    /* 底部安全区 */
-    .mb-safe {margin-bottom: 20px;}
+    /* === Tab 容器 === */
+    .stTabs [data-baseweb="tab-list"] {gap: 4px; background: #f3f4f6; border-radius: 12px; padding: 3px; margin-bottom: 12px;}
+    .stTabs [data-baseweb="tab"] {border-radius: 10px; padding: 8px 16px; font-size: 12px; font-weight: 500; border: none !important;}
+    .stTabs [aria-selected="true"] {background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08);}
+
+    /* === 展开器 === */
+    .stExpander {border: none !important; border-radius: 16px !important; overflow: hidden;
+                 box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03); margin-bottom: 10px;}
+    .stExpander > div:first-child {background: white; border: none; padding: 12px 16px; font-weight: 600; font-size: 13px;}
+    .stExpander > div:last-child {background: white; border: none; border-top: 1px solid #f3f4f6; padding: 16px;}
+
+    /* === Infobox === */
+    .stAlert {border-radius: 12px !important; font-size: 13px !important; padding: 10px 14px !important; border: none !important;}
+
+    /* === DataFrame === */
+    .stDataFrame {border-radius: 12px; overflow: hidden; border: 1px solid #f0f0f5; margin-bottom: 10px;}
+
+    /* === Section Header === */
+    .section-title {font-size: 15px; font-weight: 700; color: #1a237e; margin: 14px 0 8px; padding-left: 2px;}
+
+    /* === 安全区 === */
+    .safe-bottom {height: 20px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -212,47 +300,29 @@ def dict_from_row(row):
 init_db()
 
 # ── 导航 ──
-PAGES = ["📊 首页", "🚪 房间", "👤 租客", "📄 租约", "💰 收租", "⚡ 水电", "🔧 维修", "📈 报表"]
+NAV_ITEMS = [
+    ("📊", "首页", "📊 首页"),
+    ("🚪", "房间", "🚪 房间"),
+    ("📄", "租约", "📄 租约"),
+    ("💰", "收租", "💰 收租"),
+    ("📈", "报表", "📈 报表"),
+]
 if "page" not in st.session_state:
     st.session_state.page = "📊 首页"
 
-# 顶部导航
-nav_html = '<div class="nav-tabs">'
-for p in PAGES:
-    active = "active" if st.session_state.page == p else ""
-    nav_html += f'<button class="nav-tab {active}" onclick="alert(\'nav_{p}\')">{p}</button>'
-nav_html += "</div>"
-st.markdown(nav_html, unsafe_allow_html=True)
+# 页面切换回调（通过底部导航）
+nav_cols = st.columns(len(NAV_ITEMS))
+for i, (icon, label, page_key) in enumerate(NAV_ITEMS):
+    with nav_cols[i]:
+        is_active = st.session_state.page == page_key
+        btn_type = "primary" if is_active else "secondary"
+        if st.button(f"{icon}\n{label}", key=f"nav_{page_key}",
+                     use_container_width=True, type=btn_type):
+            st.session_state.page = page_key
+            st.rerun()
 
-# 导航回调
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    if st.button("📊 首页", use_container_width=True, type="secondary" if st.session_state.page != "📊 首页" else "primary"):
-        st.session_state.page = "📊 首页"; st.rerun()
-with col2:
-    if st.button("🚪 房间", use_container_width=True, type="secondary" if st.session_state.page != "🚪 房间" else "primary"):
-        st.session_state.page = "🚪 房间"; st.rerun()
-with col3:
-    if st.button("👤 租客", use_container_width=True, type="secondary" if st.session_state.page != "👤 租客" else "primary"):
-        st.session_state.page = "👤 租客"; st.rerun()
-with col4:
-    if st.button("📄 租约", use_container_width=True, type="secondary" if st.session_state.page != "📄 租约" else "primary"):
-        st.session_state.page = "📄 租约"; st.rerun()
-with col5:
-    if st.button("💰 收租", use_container_width=True, type="secondary" if st.session_state.page != "💰 收租" else "primary"):
-        st.session_state.page = "💰 收租"; st.rerun()
-col6, col7, col8 = st.columns(3)
-with col6:
-    if st.button("⚡ 水电", use_container_width=True, type="secondary" if st.session_state.page != "⚡ 水电" else "primary"):
-        st.session_state.page = "⚡ 水电"; st.rerun()
-with col7:
-    if st.button("🔧 维修", use_container_width=True, type="secondary" if st.session_state.page != "🔧 维修" else "primary"):
-        st.session_state.page = "🔧 维修"; st.rerun()
-with col8:
-    if st.button("📈 报表", use_container_width=True, type="secondary" if st.session_state.page != "📈 报表" else "primary"):
-        st.session_state.page = "📈 报表"; st.rerun()
-
-st.divider()
+# 隐藏第1行分割线
+st.markdown("<hr style='margin:2px 0;opacity:0;'>", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════
@@ -271,6 +341,9 @@ if st.session_state.page == "📊 首页":
                            (ms.isoformat(), me.isoformat())).fetchone()[0]
     paid_amt = conn.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status='paid' AND paid_date>=? AND paid_date<=?",
                            (ms.isoformat(), me.isoformat())).fetchone()[0]
+    total_amt = paid_amt + pending
+    pct = min(100, int((paid_amt / total_amt * 100) if total_amt > 0 else 0))
+
     pending_r = conn.execute("SELECT COUNT(*) FROM repairs WHERE status='pending'").fetchone()[0]
     expiring = conn.execute("""
         SELECT t.*, r.room_number FROM tenancies t JOIN rooms r ON t.room_id=r.id
@@ -279,40 +352,66 @@ if st.session_state.page == "📊 首页":
         ORDER BY t.end_date""",
         ((date.today() + timedelta(days=7)).isoformat(), today())).fetchall()
 
-    st.markdown(f'<div style="background:linear-gradient(135deg,#1e40af,#3b82f6);color:white;border-radius:16px;padding:20px;margin-bottom:16px;">'
-                f'<div style="font-size:20px;font-weight:700;">🏠 出租屋管理站</div>'
-                f'<div style="font-size:13px;opacity:0.8;margin-top:4px;">{date.today().strftime("%Y年%m月%d日")}</div>'
-                f'</div>', unsafe_allow_html=True)
+    # Header
+    st.markdown(f'''<div class="app-header">
+        <h1>🏠 出租屋管理站</h1>
+        <p>{date.today().strftime("%Y年%m月%d日 %A")}</p>
+        <div class="header-stat-row">
+            <div class="header-stat"><div class="num">{total}</div><div class="lbl">总房间</div></div>
+            <div class="header-stat"><div class="num" style="color:#6ee7b7;">{occupied}</div><div class="lbl">已出租</div></div>
+            <div class="header-stat"><div class="num" style="color:#fcd34d;">{vacant}</div><div class="lbl">空房</div></div>
+        </div>
+    </div>''', unsafe_allow_html=True)
 
-    # 统计
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#1e40af;">{total}</div><div style="font-size:12px;color:#9ca3af;">总房间</div></div>', unsafe_allow_html=True)
-    with c2:
-        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#059669;">{occupied}</div><div style="font-size:12px;color:#9ca3af;">已出租</div></div>', unsafe_allow_html=True)
-    with c3:
-        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#d97706;">{vacant}</div><div style="font-size:12px;color:#9ca3af;">空房</div></div>', unsafe_allow_html=True)
+    # 快捷入口
+    quick_cols = st.columns(4)
+    quick_items = [("💰", "收租", "💰 收租"), ("📄", "租约", "📄 租约"), ("⚡", "水电", "⚡ 水电"), ("🔧", "维修", "🔧 维修")]
+    for i, (icon, label, page) in enumerate(quick_items):
+        with quick_cols[i]:
+            if st.button(f"{icon}\n{label}", key=f"quick_{page}", use_container_width=True):
+                st.session_state.page = page
+                st.rerun()
 
-    st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">'
-                f'<span style="font-size:13px;color:#6b7280;">本月租金</span>'
-                f'<span><span style="color:#059669;font-weight:700;font-size:20px;">{fmt_money(paid_amt)}</span>'
-                f'<span style="color:#d1d5db;margin:0 4px;">/</span>'
-                f'<span style="font-weight:700;font-size:20px;">{fmt_money(paid_amt+pending)}</span>元</span>'
-                f'</div></div>', unsafe_allow_html=True)
+    # 租金进度
+    st.markdown(f'''<div class="progress-card">
+        <div class="progress-header">
+            <span class="title">本月租金</span>
+            <span class="amount">
+                <span class="paid">{fmt_money(paid_amt)}</span>
+                <span class="sep">/</span>
+                <span class="total">{fmt_money(total_amt)}</span>
+            </span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:{pct}%"></div></div>
+        <div style="font-size:11px;color:#9ca3af;text-align:right;margin-top:4px;">已收 {pct}%</div>
+    </div>''', unsafe_allow_html=True)
 
-    # 到期提醒
+    # 楼层房间预览
+    floors = {}
+    for r in rooms:
+        floors.setdefault(r["floor"], []).append(r)
+    st.markdown('<div class="section-title">🏘️ 房间状态</div>', unsafe_allow_html=True)
+    for fl in sorted(floors.keys()):
+        fl_rooms = floors[fl]
+        cells = "".join(
+            f'<a class="room-cell {"occupied" if r["status"]=="occupied" else "vacant"}">'
+            f'{r["room_number"]}<div class="dot"></div></a>'
+            for r in fl_rooms
+        )
+        st.markdown(f'<div class="floor-label">{fl}F</div><div class="room-grid">{cells}</div>', unsafe_allow_html=True)
+
+    # 到期提醒 & 维修
     if expiring:
-        st.markdown("### ⏰ 即将到期")
+        st.markdown('<div class="section-title">⏰ 即将到期</div>', unsafe_allow_html=True)
         for e in expiring:
             days = (date.fromisoformat(e["end_date"]) - date.today()).days
-            st.markdown(f'<div class="card" style="display:flex;justify-content:space-between;align-items:center;">'
-                        f'<span><b>{e["room_number"]}</b></span>'
-                        f'<span class="badge badge-yellow">剩 {days} 天</span></div>', unsafe_allow_html=True)
-
+            st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">'
+                        f'<div><b>{e["room_number"]}</b></div>'
+                        f'<span class="tag tag-yellow">剩 {days} 天</span></div></div>', unsafe_allow_html=True)
     if pending_r:
-        st.markdown(f'<div class="card" style="display:flex;justify-content:space-between;align-items:center;border-left:3px solid #ef4444;">'
-                    f'<span>🔧 待处理维修</span><span class="badge badge-red">{pending_r} 项</span></div>', unsafe_allow_html=True)
-
+        st.markdown('<div class="section-title">🔧 待处理</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">'
+                    f'<span>维修报修</span><span class="tag tag-red">{pending_r} 项待处理</span></div></div>', unsafe_allow_html=True)
     conn.close()
 
 
@@ -321,7 +420,7 @@ if st.session_state.page == "📊 首页":
 # ══════════════════════════════════════════════════════════
 
 elif st.session_state.page == "🚪 房间":
-    st.markdown("### 🚪 房间管理")
+    st.markdown('<div class="section-title">🚪 房间管理</div>', unsafe_allow_html=True)
     conn = get_conn()
     rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
     floors = {}
@@ -329,46 +428,52 @@ elif st.session_state.page == "🚪 房间":
         floors.setdefault(r["floor"], []).append(r)
 
     for fl in sorted(floors.keys()):
-        st.markdown(f"<div style='font-size:14px;font-weight:600;color:#374151;margin:8px 0 4px;'>{fl}F</div>", unsafe_allow_html=True)
-        cols = st.columns(5)
-        for i, room in enumerate(floors[fl]):
-            with cols[i % 5]:
-                cls = "occupied" if room["status"] == "occupied" else "vacant"
-                st.markdown(f'<div class="room-cell {cls}" onclick="alert(\'room_{room["id"]}\')">'
-                            f'{room["room_number"]}<br><span style="font-size:10px;">{"●" if room["status"]=="occupied" else "○"}</span>'
-                            f'</div>', unsafe_allow_html=True)
+        fl_rooms = floors[fl]
+        cells = "".join(
+            f'<div class="room-cell {"occupied" if r["status"]=="occupied" else "vacant"}">'
+            f'{r["room_number"]}<div class="dot"></div></div>'
+            for r in fl_rooms
+        )
+        st.markdown(f'<div class="floor-label">{fl}F</div><div class="room-grid">{cells}</div>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("#### 房间详情")
+    # 房间详情
+    st.markdown('<div class="section-title">🔍 房间详情</div>', unsafe_allow_html=True)
     room_ids = {f"{r['floor']}F {r['room_number']}": r["id"] for r in rooms}
-    sel = st.selectbox("选择房间", list(room_ids.keys()), key="room_select")
+    sel = st.selectbox("选择房间", list(room_ids.keys()), key="room_select", label_visibility="collapsed")
     rid = room_ids[sel]
     room = conn.execute("SELECT * FROM rooms WHERE id=?", (rid,)).fetchone()
 
     if room:
-        st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;">'
-                    f'<span style="font-size:18px;font-weight:700;">{room["room_number"]}</span>'
-                    f'<span class="badge {"badge-green" if room["status"]=="occupied" else "badge-gray"}">'
-                    f'{"已租" if room["status"]=="occupied" else "空房"}</span></div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"<span style='font-size:18px;font-weight:700;'>{room['room_number']}</span>", unsafe_allow_html=True)
+            with c2:
+                tag = "tag-green" if room["status"] == "occupied" else "tag-gray"
+                lbl = "已租" if room["status"] == "occupied" else "空房"
+                st.markdown(f'<span class="tag {tag}">{lbl}</span>', unsafe_allow_html=True)
 
-        rent = st.number_input("月租(元)", value=float(room["monthly_rent"] or 0), step=50.0, key="room_rent")
-        if st.button("保存房租", key="save_rent", use_container_width=True):
-            conn.execute("UPDATE rooms SET monthly_rent=? WHERE id=?", (rent, rid))
-            conn.commit()
-            st.success("已保存")
-            st.rerun()
+            rent = st.number_input("月租(元)", value=float(room["monthly_rent"] or 0), step=50.0, key="room_rent")
+            if st.button("保存房租", key="save_rent", use_container_width=True):
+                conn.execute("UPDATE rooms SET monthly_rent=? WHERE id=?", (rent, rid))
+                conn.commit()
+                st.success("已保存")
+                st.rerun()
 
-        # 当前租约
-        tenancy = conn.execute("""
-            SELECT t.*, GROUP_CONCAT(tn.name,', ') as tenant_names
-            FROM tenancies t
-            LEFT JOIN tenant_links tl ON tl.tenancy_id=t.id
-            LEFT JOIN tenants tn ON tn.id=tl.tenant_id
-            WHERE t.room_id=? AND t.status='active'
-            GROUP BY t.id""", (rid,)).fetchone()
-        if tenancy:
-            st.markdown("**当前租客:** " + (tenancy["tenant_names"] or "—"))
-            st.caption(f"月租{fmt_money(tenancy['monthly_rent'])}元 | 押金{fmt_money(tenancy['deposit'])}元 | {tenancy['lease_type']}")
+            tenancy = conn.execute("""
+                SELECT t.*, GROUP_CONCAT(tn.name,', ') as tenant_names
+                FROM tenancies t
+                LEFT JOIN tenant_links tl ON tl.tenancy_id=t.id
+                LEFT JOIN tenants tn ON tn.id=tl.tenant_id
+                WHERE t.room_id=? AND t.status='active'
+                GROUP BY t.id""", (rid,)).fetchone()
+            if tenancy:
+                st.markdown(f'<div style="background:#f9fafb;border-radius:10px;padding:10px;margin-top:8px;">'
+                            f'<div style="font-size:13px;font-weight:600;margin-bottom:4px;">当前租客</div>'
+                            f'<div style="font-size:14px;">{tenancy["tenant_names"] or "—"}</div>'
+                            f'<div style="font-size:12px;color:#6b7280;margin-top:4px;">'
+                            f'{fmt_money(tenancy["monthly_rent"])}元/月 | 押金{fmt_money(tenancy["deposit"])}元</div>'
+                            f'</div>', unsafe_allow_html=True)
         conn.close()
 
 
