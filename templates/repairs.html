@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}维修报修{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4" x-data="{ showForm: false }">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-bold">🔧 维修报修</h1>
+        <button @click="showForm = true" class="bg-primary-600 text-white text-sm px-3 py-2 rounded-lg">+ 报修</button>
+    </div>
+
+    <div class="flex gap-2 mb-3 overflow-x-auto pb-1">
+        {% for s, label in [('pending','待处理'),('completed','已完成'),('all','全部')] %}
+        <a href="/repairs?status={{ s }}"
+           class="whitespace-nowrap px-3 py-1.5 rounded-full text-sm {% if status == s %}bg-primary-600 text-white{% else %}bg-gray-100 text-gray-600{% endif %}">
+            {{ label }}
+        </a>
+        {% endfor %}
+    </div>
+
+    <div class="space-y-2">
+        {% for r in repairs %}
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <span class="font-bold">{{ r.room.room_number }}</span>
+                <span class="{% if r.status == 'pending' %}tag-yellow{% else %}tag-green{% endif %} text-[10px]">
+                    {{ {'pending':'待处理','completed':'已完成'}[r.status] }}
+                </span>
+            </div>
+            <p class="text-sm text-gray-600 mt-1">{{ r.description }}</p>
+            <div class="flex justify-between text-xs text-gray-400 mt-2">
+                <span>报修: {{ r.reported_date }}</span>
+                <span>费用: {{ "%.0f"|format(r.cost) }}元</span>
+            </div>
+            {% if r.status == 'pending' %}
+            <form method="post" action="/repairs/{{ r.id }}/complete" class="mt-2 flex gap-2"
+                  onsubmit="return confirm('确认完成维修？')">
+                <input type="number" name="cost" step="0.01" class="form-input flex-1 text-sm" placeholder="维修费用">
+                <input type="text" name="notes" class="form-input flex-1 text-sm" placeholder="备注">
+                <button class="btn-sm bg-green-500 text-white rounded-lg whitespace-nowrap">完成</button>
+            </form>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="text-center py-12 text-gray-400">
+            <div class="text-4xl mb-2">🔧</div>
+            <p>暂无维修记录</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 报修弹窗 -->
+    <div x-show="showForm" x-cloak class="modal-overlay" @click.self="showForm = false">
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="font-bold text-lg">🔧 新建报修</h2>
+                <button @click="showForm = false" class="text-gray-400 text-2xl">×</button>
+            </div>
+            <form method="post" action="/repairs/create" class="space-y-3">
+                <div>
+                    <label class="form-label">房间</label>
+                    <select name="room_id" required class="form-input">
+                        <option value="">选择房间</option>
+                        {% for r in rooms %}
+                        <option value="{{ r.id }}">{{ r.floor }}F {{ r.room_number }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">问题描述</label>
+                    <textarea name="description" required class="form-input" rows="3"
+                              placeholder="描述需要维修的内容..."></textarea>
+                </div>
+                <div>
+                    <label class="form-label">预计费用（选填）</label>
+                    <input type="number" name="cost" step="0.01" class="form-input" value="0">
+                </div>
+                <button type="submit" class="btn-primary">提交报修</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
