@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}首页 - 出租屋管理{% endblock %}
+{% block content %}
+
+<!-- 头部 -->
+<div class="bg-primary-600 text-white px-4 pt-4 pb-8 rounded-b-2xl">
+    <div class="flex justify-between items-center mb-2">
+        <h1 class="text-xl font-bold">🏠 出租屋管理站</h1>
+        <a href="/logout" class="text-white/70 text-sm">退出</a>
+    </div>
+    <p class="text-white/70 text-sm">{{ today().strftime('%Y年%m月%d日 %A') }}</p>
+
+    <!-- 快速统计 -->
+    <div class="grid grid-cols-3 gap-3 mt-4">
+        <div class="bg-white/15 rounded-xl p-3 text-center backdrop-blur-sm">
+            <div class="text-2xl font-bold">{{ total_rooms }}</div>
+            <div class="text-xs text-white/70">总房间</div>
+        </div>
+        <div class="bg-white/15 rounded-xl p-3 text-center backdrop-blur-sm">
+            <div class="text-2xl font-bold text-green-300">{{ occupied }}</div>
+            <div class="text-xs text-white/70">已出租</div>
+        </div>
+        <div class="bg-white/15 rounded-xl p-3 text-center backdrop-blur-sm">
+            <div class="text-2xl font-bold text-yellow-300">{{ vacant }}</div>
+            <div class="text-xs text-white/70">空房</div>
+        </div>
+    </div>
+
+    <!-- 本月租金 -->
+    <div class="bg-white/10 rounded-xl p-3 mt-3 flex justify-between items-center">
+        <span class="text-white/80 text-sm">本月租金</span>
+        <div>
+            <span class="text-green-300 font-bold">{{ "%.0f"|format(paid_rent) }}</span>
+            <span class="text-white/50 mx-1">/</span>
+            <span class="text-white font-bold">{{ "%.0f"|format(expected_rent) }}</span>
+            <span class="text-white/60 text-xs ml-1">元</span>
+        </div>
+    </div>
+</div>
+
+<!-- 功能快捷入口 -->
+<div class="px-4 -mt-5">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 grid grid-cols-4 gap-3 text-center">
+        <a href="/payments" class="space-y-1">
+            <div class="text-2xl">💰</div>
+            <div class="text-[11px] text-gray-500">收租</div>
+        </a>
+        <a href="/leases" class="space-y-1">
+            <div class="text-2xl">📄</div>
+            <div class="text-[11px] text-gray-500">租约</div>
+        </a>
+        <a href="/utilities" class="space-y-1">
+            <div class="text-2xl">⚡</div>
+            <div class="text-[11px] text-gray-500">水电</div>
+        </a>
+        <a href="/repairs" class="space-y-1 relative">
+            <div class="text-2xl">🔧</div>
+            <div class="text-[11px] text-gray-500">维修</div>
+            {% if pending_repairs > 0 %}
+            <span class="badge absolute -top-1 -right-1 text-[9px] min-w-[16px] h-4">{{ pending_repairs }}</span>
+            {% endif %}
+        </a>
+    </div>
+</div>
+
+<!-- 楼层房间概览 -->
+<div class="px-4 mt-4">
+    <h2 class="text-base font-bold text-gray-800 mb-3">房间状态</h2>
+    {% for floor, room_list in floors %}
+    <div class="mb-3">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-semibold text-gray-600">{{ floor }}F</span>
+            <span class="text-xs text-gray-400">{{ room_list|length }}间</span>
+        </div>
+        <div class="grid grid-cols-5 gap-2">
+            {% for room in room_list %}
+            <a href="/rooms/{{ room.id }}" class="block">
+                <div class="{% if room.status == 'occupied' %}bg-green-50 border-green-200 text-green-700{% else %}bg-gray-50 border-gray-200 text-gray-400{% endif %} border rounded-lg p-2 text-center">
+                    <div class="text-[11px] font-bold">{{ room.room_number }}</div>
+                    {% if room.status == 'occupied' %}
+                    <div class="text-[9px] text-green-500 mt-0.5">●</div>
+                    {% else %}
+                    <div class="text-[9px] text-gray-300 mt-0.5">○</div>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- 到期提醒 -->
+{% if expiring_leases %}
+<div class="px-4 mt-4 mb-4">
+    <h2 class="text-base font-bold text-gray-800 mb-3">⏰ 即将到期</h2>
+    <div class="space-y-2">
+        {% for lease in expiring_leases %}
+        <a href="/leases" class="block card flex items-center justify-between">
+            <div>
+                <span class="font-medium">{{ lease.room.room_number }}</span>
+                <span class="text-gray-500 text-sm ml-2">
+                    {% for t in lease.tenant_list %}{{ t.name }}{% if not loop.last %},{% endif %}{% endfor %}
+                </span>
+            </div>
+            <span class="tag-yellow text-xs">
+                剩 {{ (lease.end_date - today()).days }} 天
+            </span>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
