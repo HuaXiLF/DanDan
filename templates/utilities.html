@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}水电费管理{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4" x-data="{ showForm: false }">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-bold">⚡ 水电费</h1>
+        <button @click="showForm = true" class="bg-primary-600 text-white text-sm px-3 py-2 rounded-lg">+ 抄表</button>
+    </div>
+
+    <!-- 月份筛选 -->
+    <div class="overflow-x-auto pb-1 mb-3">
+        <div class="flex gap-2">
+            <a href="/utilities" class="whitespace-nowrap px-3 py-1.5 rounded-full text-sm {% if not current_month %}bg-primary-600 text-white{% else %}bg-gray-100 text-gray-600{% endif %}">全部</a>
+            {% for m in months %}
+            <a href="/utilities?month={{ m }}"
+               class="whitespace-nowrap px-3 py-1.5 rounded-full text-sm {% if current_month == m %}bg-primary-600 text-white{% else %}bg-gray-100 text-gray-600{% endif %}">
+                {{ m }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- 快捷说明 -->
+    <div class="card mb-3 text-xs text-gray-500">
+        💡 电费 1元/度 ｜ 水费 70元/人/月
+    </div>
+
+    <div class="space-y-2">
+        {% for b in bills %}
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <span class="font-bold">{{ b.room.room_number }}</span>
+                <span class="text-xs text-gray-400">{{ b.month }}</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-2 text-center text-sm">
+                <div>
+                    <div class="text-gray-500 text-[10px]">用电</div>
+                    <div>{{ "%.0f"|format(b.electricity_usage) }}度</div>
+                </div>
+                <div>
+                    <div class="text-gray-500 text-[10px]">水费</div>
+                    <div>{{ "%.0f"|format(b.water_cost) }}元</div>
+                </div>
+                <div>
+                    <div class="text-gray-500 text-[10px]">合计</div>
+                    <div class="font-bold {% if b.paid %}text-green-600{% else %}text-red-500{% endif %}">
+                        {{ "%.0f"|format(b.total) }}元
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-between items-center mt-2 pt-2 border-t border-gray-50">
+                <span class="text-xs {% if b.paid %}text-green-600{% else %}text-yellow-600{% endif %}">
+                    {{ '已缴' if b.paid else '未缴' }}
+                </span>
+                {% if not b.paid %}
+                <form method="post" action="/utilities/{{ b.id }}/pay">
+                    <button class="btn-sm bg-green-500 text-white rounded-lg text-xs">标记已缴</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center py-12 text-gray-400">
+            <div class="text-4xl mb-2">⚡</div>
+            <p>暂无水电费记录</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 抄表弹窗 -->
+    <div x-show="showForm" x-cloak class="modal-overlay" @click.self="showForm = false">
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="font-bold text-lg">⚡ 抄表录入</h2>
+                <button @click="showForm = false" class="text-gray-400 text-2xl">×</button>
+            </div>
+            <form method="post" action="/utilities/create" class="space-y-3">
+                <div>
+                    <label class="form-label">房间</label>
+                    <select name="room_id" required class="form-input">
+                        <option value="">选择房间</option>
+                        {% for r in rooms %}
+                        <option value="{{ r.id }}">{{ r.floor }}F {{ r.room_number }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">月份</label>
+                    <input type="month" name="month" required class="form-input"
+                           value="{{ today().strftime('%Y-%m') }}">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">电表读数</label>
+                        <input type="number" name="electricity_reading" step="0.01" class="form-input" value="0">
+                    </div>
+                    <div>
+                        <label class="form-label">用电量（度）</label>
+                        <input type="number" name="electricity_usage" step="0.01" class="form-input" value="0" placeholder="kWh">
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label">本月租客人数（用于计算水费）</label>
+                    <input type="number" name="tenant_count" min="0" max="4" class="form-input" value="0">
+                    <p class="text-xs text-gray-400 mt-1">水费 = 人数 × 70元</p>
+                </div>
+                <button type="submit" class="btn-primary">保存</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
