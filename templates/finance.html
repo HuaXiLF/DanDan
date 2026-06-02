@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}财务报表{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-bold">📊 财务报表</h1>
+        <!-- 年份选择 -->
+        <form method="get" action="/finance">
+            <select name="year" onchange="this.form.submit()" class="bg-gray-100 rounded-lg px-3 py-2 text-sm">
+                {% for y in years %}
+                <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}年</option>
+                {% endfor %}
+                <option value="{{ today().year }}" {% if today().year == year %}selected{% endif %}>{{ today().year }}年</option>
+            </select>
+        </form>
+    </div>
+
+    <!-- 年度汇总 -->
+    <div class="grid grid-cols-3 gap-2 mb-4">
+        <div class="card text-center">
+            <div class="stat-value text-green-600">{{ "%.0f"|format(total_income) }}</div>
+            <div class="stat-label">总收入</div>
+        </div>
+        <div class="card text-center">
+            <div class="stat-value text-red-500">{{ "%.0f"|format(total_expense) }}</div>
+            <div class="stat-label">总支出</div>
+        </div>
+        <div class="card text-center">
+            <div class="stat-value text-primary-600">{{ "%.0f"|format(total_profit) }}</div>
+            <div class="stat-label">净利润</div>
+        </div>
+    </div>
+
+    <!-- 收入构成 -->
+    <div class="grid grid-cols-2 gap-2 mb-4">
+        <div class="card text-center">
+            <div class="font-bold text-lg">{{ "%.0f"|format(rent_income) }}</div>
+            <div class="text-xs text-gray-500">租金收入</div>
+        </div>
+        <div class="card text-center">
+            <div class="font-bold text-lg">{{ "%.0f"|format(utility_income) }}</div>
+            <div class="text-xs text-gray-500">水电收入</div>
+        </div>
+    </div>
+
+    <!-- 月度走势图 -->
+    <div class="card mb-4">
+        <h2 class="font-bold text-sm text-gray-500 mb-3">{{ year }}年 月度走势</h2>
+        <canvas id="financeChart" height="200"></canvas>
+    </div>
+
+    <!-- 月度明细表 -->
+    <div class="card">
+        <h2 class="font-bold text-sm text-gray-500 mb-3">月度明细</h2>
+        <div class="space-y-1">
+            {% for m in monthly_data %}
+            <div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                <span class="text-sm font-medium w-12">{{ m.month }}</span>
+                <div class="flex-1 flex gap-4 text-xs justify-end">
+                    <span class="text-green-600">+{{ "%.0f"|format(m.income) }}</span>
+                    <span class="text-red-500">-{{ "%.0f"|format(m.expense) }}</span>
+                    <span class="{% if m.profit >= 0 %}text-primary-600{% else %}text-red-500{% endif %} font-semibold">
+                        {{ "%.0f"|format(m.profit) }}
+                    </span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('financeChart');
+    if (!ctx) return;
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: [{% for m in monthly_data %}'{{ m.month }}'{% if not loop.last %},{% endif %}{% endfor %}],
+            datasets: [
+                {
+                    label: '收入',
+                    data: [{% for m in monthly_data %}{{ m.income }}{% if not loop.last %},{% endif %}{% endfor %}],
+                    backgroundColor: '#22c55e66',
+                    borderColor: '#22c55e',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                },
+                {
+                    label: '支出',
+                    data: [{% for m in monthly_data %}{{ m.expense }}{% if not loop.last %},{% endif %}{% endfor %}],
+                    backgroundColor: '#ef444466',
+                    borderColor: '#ef4444',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true, position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } }
+            },
+            scales: {
+                y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+});
+</script>
+{% endblock %}
