@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}租金管理{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4" x-data="paymentManager()">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-bold">💰 租金管理</h1>
+        <div class="flex gap-2">
+            <button @click="batchGenerate()" class="bg-green-600 text-white text-xs px-3 py-2 rounded-lg">一键生成</button>
+            <button @click="showForm = true" class="bg-primary-600 text-white text-sm px-3 py-2 rounded-lg">+ 录入</button>
+        </div>
+    </div>
+
+    <!-- 筛选 -->
+    <div class="flex gap-2 mb-3 overflow-x-auto pb-1">
+        {% for s, label in [('pending','待收'),('paid','已收'),('overdue','逾期'),('all','全部')] %}
+        <a href="/payments?status={{ s }}"
+           class="whitespace-nowrap px-3 py-1.5 rounded-full text-sm {% if status == s %}bg-primary-600 text-white{% else %}bg-gray-100 text-gray-600{% endif %}">
+            {{ label }}
+        </a>
+        {% endfor %}
+    </div>
+
+    <!-- 统计 -->
+    <div class="grid grid-cols-2 gap-2 mb-3">
+        <div class="card text-center">
+            <div class="stat-value text-green-600">{{ payments|selectattr('status', 'equalto', 'paid')|list|sum(attribute='amount')|round|int }}</div>
+            <div class="stat-label">已收租金</div>
+        </div>
+        <div class="card text-center">
+            <div class="stat-value text-red-500">{{ payments|selectattr('status', 'equalto', 'pending')|list|sum(attribute='amount')|round|int }}</div>
+            <div class="stat-label">待收租金</div>
+        </div>
+    </div>
+
+    <!-- 列表 -->
+    <div class="space-y-2">
+        {% for p in payments %}
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <span class="font-bold">{{ p.tenancy.room.room_number }}</span>
+                    <span class="text-gray-500 text-sm ml-2">
+                        {% for t in p.tenancy.tenant_list %}{{ t.name }}{% if not loop.last %},{% endif %}{% endfor %}
+                    </span>
+                </div>
+                <span class="text-primary-600 font-bold">{{ "%.0f"|format(p.amount) }}元</span>
+            </div>
+            <div class="flex justify-between text-xs text-gray-400 mt-1">
+                <span>{{ p.period_start }} ~ {{ p.period_end }}</span>
+                <span class="{% if p.status == 'paid' %}tag-green{% elif p.status == 'overdue' %}tag-red{% else %}tag-yellow{% endif %} text-[10px]">
+                    {{ {'paid':'已收','pending':'待收','overdue':'逾期'}[p.status] }}
+                </span>
+            </div>
+            {% if p.status == 'pending' or p.status == 'overdue' %}
+            <div class="mt-2 flex gap-2">
+                <form method="post" action="/payments/{{ p.id }}/pay">
+                    <button class="btn-sm bg-green-500 text-white rounded-lg">标记已收</button>
+                </form>
+                <a href="/export/{{ p.id }}" class="btn-sm bg-gray-100 text-gray-600 rounded-lg" target="_blank">📤 账单</a>
+            </div>
+            {% endif %}
+            {% if p.status == 'paid' %}
+            <div class="mt-1 flex justify-between text-xs">
+                <span class="text-green-600">已收: {{ p.paid_date }}</span>
+                <form method="post" action="/payments/{{ p.id }}/unpay">
+                    <button class="text-red-400 text-[10px]" onclick="return confirm('撤销收款？')">撤销</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="text-center py-12 text-gray-400">
+            <div class="text-4xl mb-2">💰</div>
+            <p>暂无租金记录</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 录入租金刚弹出 -->
+    <div x-show="showForm" x-cloak class="modal-overlay" @click.self="showForm = false">
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="font-bold text-lg">录入租金</h2>
+                <button @click="showForm = false" class="text-gray-400 text-2xl">×</button>
+            </div>
+            <form method="post" action="/payments/create" class="space-y-3">
+                <div>
+                    <label class="form-label">租约</label>
+                    <select name="tenancy_id" required class="form-input">
+                        <option value="">选择房间</option>
+                        {% for l in leases %}
+                        <option value="{{ l.id }}">{{ l.display_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">开始日期</label>
+                        <input type="date" name="period_start" required class="form-input">
+                    </div>
+                    <div>
+                        <label class="form-label">结束日期</label>
+                        <input type="date" name="period_end" required class="form-input">
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label">金额</label>
+                    <input type="number" name="amount" step="0.01" required class="form-input" placeholder="元">
+                </div>
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="paid" value="true">
+                    <span class="text-sm">标记为已收款</span>
+                </label>
+                <button type="submit" class="btn-primary">保存</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function paymentManager() {
+    return {
+        showForm: false,
+        async batchGenerate() {
+            if (!confirm('生成本月所有活跃租约的租金账单？')) return;
+            const resp = await fetch('/payments/batch');
+            const data = await resp.json();
+            alert(`已生成 ${data.created} 条，跳过 ${data.skipped} 条`);
+            location.reload();
+        }
+    }
+}
+</script>
+{% endblock %}
