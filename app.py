@@ -351,7 +351,7 @@ elif st.session_state.page == "🚪 房间":
                     f'<span class="badge {"badge-green" if room["status"]=="occupied" else "badge-gray"}">'
                     f'{"已租" if room["status"]=="occupied" else "空房"}</span></div>', unsafe_allow_html=True)
 
-        rent = st.number_input("月租(元)", value=room["monthly_rent"], step=50, key="room_rent")
+        rent = st.number_input("月租(元)", value=float(room["monthly_rent"] or 0), step=50.0, key="room_rent")
         if st.button("保存房租", key="save_rent", use_container_width=True):
             conn.execute("UPDATE rooms SET monthly_rent=? WHERE id=?", (rent, rid))
             conn.commit()
