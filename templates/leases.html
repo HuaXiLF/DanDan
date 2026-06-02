@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}租约管理{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4" x-data="leaseManager()">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-bold">📄 租约管理</h1>
+        <button @click="showForm = true" class="bg-primary-600 text-white text-sm px-3 py-2 rounded-lg">+ 新建</button>
+    </div>
+
+    <!-- 状态筛选 -->
+    <div class="flex gap-2 mb-3 overflow-x-auto pb-1">
+        {% for s, label in [('active','生效中'),('expired','已到期'),('terminated','已终止'),('all','全部')] %}
+        <a href="/leases?status={{ s }}"
+           class="whitespace-nowrap px-3 py-1.5 rounded-full text-sm {% if status == s %}bg-primary-600 text-white{% else %}bg-gray-100 text-gray-600{% endif %}">
+            {{ label }}
+        </a>
+        {% endfor %}
+    </div>
+
+    <!-- 租约列表 -->
+    <div class="space-y-2">
+        {% for lease in leases %}
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="font-bold">{{ lease.room.room_number }}</span>
+                    <span class="{% if lease.status == 'active' %}tag-green{% elif lease.status == 'expired' %}tag-yellow{% else %}tag-gray{% endif %} text-[10px]">
+                        {{ {'active':'生效','expired':'到期','terminated':'终止'}[lease.status] }}
+                    </span>
+                </div>
+                <span class="text-primary-600 font-bold">{{ "%.0f"|format(lease.monthly_rent) }}/月</span>
+            </div>
+            <div class="text-sm text-gray-500 mt-1">
+                租客: {% for t in lease.tenant_list %}{{ t.name }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </div>
+            <div class="flex justify-between text-xs text-gray-400 mt-1">
+                <span>{{ lease.start_date }} ~ {{ lease.end_date or '未定' }}</span>
+                <span>{{ {'monthly':'月租','yearly':'年租','weekly':'周租'}[lease.lease_type] }}</span>
+            </div>
+            {% if lease.status == 'active' and lease.end_date %}
+            <div class="mt-2 flex gap-2">
+                <span class="tag-yellow text-[10px]">
+                    到期: {{ lease.end_date }}
+                    (剩 {{ (lease.end_date - today()).days }} 天)
+                </span>
+                <form method="post" action="/leases/{{ lease.id }}/terminate" onsubmit="return confirm('确定终止该租约？')">
+                    <button class="text-red-500 text-xs">终止</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="text-center py-12 text-gray-400">
+            <div class="text-4xl mb-2">📄</div>
+            <p>暂无租约</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- 新建租约弹窗 -->
+    <div x-show="showForm" x-cloak class="modal-overlay" @click.self="showForm = false">
+        <div class="modal-content">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="font-bold text-lg">新建租约</h2>
+                <button @click="showForm = false" class="text-gray-400 text-2xl">×</button>
+            </div>
+
+            <form method="post" action="/leases/create" class="space-y-3">
+                <div>
+                    <label class="form-label">房间</label>
+                    <select name="room_id" required class="form-input">
+                        <option value="">选择房间</option>
+                        {% for r in rooms %}
+                        <option value="{{ r.id }}">
+                            {{ r.floor }}F {{ r.room_number }} {% if r.status == 'occupied' %}(已租){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="form-label">租客（可多选）</label>
+                    <div class="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto p-2 bg-gray-50 rounded-xl">
+                        {% for t in tenants %}
+                        <label class="flex items-center gap-2 text-sm p-1.5 bg-white rounded-lg">
+                            <input type="checkbox" value="{{ t.id }}" x-model="selectedTenants">
+                            <span>{{ t.name }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <input type="hidden" name="tenant_ids" :value="selectedTenants.join(',')">
+                    <a href="/tenants/create" class="text-xs text-primary-600 mt-1 inline-block">+ 新增租客</a>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">租赁类型</label>
+                        <select name="lease_type" class="form-input">
+                            <option value="monthly">月租</option>
+                            <option value="yearly">年租</option>
+                            <option value="weekly">周租</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">月租金</label>
+                        <input type="number" name="monthly_rent" step="0.01" required class="form-input" placeholder="元">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">押金</label>
+                        <input type="number" name="deposit" step="0.01" class="form-input" value="0">
+                    </div>
+                    <div>
+                        <label class="form-label">押金已付</label>
+                        <label class="flex items-center gap-2 mt-2">
+                            <input type="checkbox" name="deposit_paid" value="true">
+                            <span class="text-sm">已付押金</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="form-label">开始日期</label>
+                        <input type="date" name="start_date" required class="form-input" value="{{ today().isoformat() }}">
+                    </div>
+                    <div>
+                        <label class="form-label">结束日期（选填）</label>
+                        <input type="date" name="end_date" class="form-input">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="form-label">备注</label>
+                    <textarea name="notes" class="form-input" rows="2" placeholder="选填"></textarea>
+                </div>
+
+                <button type="submit" class="btn-primary">创建租约</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function leaseManager() {
+    return {
+        showForm: false,
+        selectedTenants: [],
+    }
+}
+</script>
+{% endblock %}
