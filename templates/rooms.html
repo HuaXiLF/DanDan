@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}房间管理{% endblock %}
+{% block content %}
+
+<div class="px-4 py-4">
+    <h1 class="text-lg font-bold text-gray-800 mb-4">🚪 房间管理</h1>
+
+    {% for floor, room_list in floors %}
+    <div class="mb-4">
+        <div class="flex items-center justify-between mb-2">
+            <h2 class="font-bold text-gray-700">{{ floor }} 楼</h2>
+            <span class="text-xs text-gray-400">{{ room_list|length }} 间</span>
+        </div>
+
+        <div class="space-y-2">
+            {% for room in room_list %}
+            <a href="/rooms/{{ room.id }}" class="block card flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-lg {% if room.status == 'occupied' %}bg-green-100 text-green-600{% else %}bg-gray-100 text-gray-400{% endif %} flex items-center justify-center font-bold text-sm">
+                        {{ room.room_number[-2:] }}
+                    </div>
+                    <div>
+                        <div class="font-semibold">{{ room.room_number }}</div>
+                        <div class="text-xs text-gray-400">
+                            {% if room.status == 'occupied' %}
+                                {% set t = room.current_tenancy() %}
+                                {% if t %}{{ t.tenant_list|map(attribute='name')|join(', ') }}{% endif %}
+                            {% else %}
+                                空房
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <div class="font-bold text-primary-600">{{ "%.0f"|format(room.monthly_rent) }}</div>
+                    <div class="text-[10px] text-gray-400">元/月</div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% endblock %}
