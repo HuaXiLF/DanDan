@@ -1,755 +1,418 @@
-"""
-数据科分析面板 — 通用数据分析平台
-支持：自定义数据集创建 → 数据录入 → 数据浏览 → 数据分析与可视化
-"""
-
-import sqlite3
-import json
+"""出租屋管理站 — FastAPI 主应用"""
 import os
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
-import streamlit as st
+from datetime import date, datetime, timedelta
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from starlette.middleware.sessions import SessionMiddleware
 
-# ── 页面配置 ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="数据科分析面板",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from models import (
+    init_db, get_db, Room, Tenant, Tenancy, TenantTenancy,
+    RentPayment, UtilityBill, Repair, Transaction,
 )
 
-# ── 数据库路径 ───────────────────────────────────────────
-DB_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(DB_DIR, "app.db")
+app = FastAPI(title="出租屋管理站")
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "dan-dan-secret-2024"))
+
+BASE_DIR = os.path.dirname(__file__)
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+templates.env.cache = None
+static_dir = os.path.join(BASE_DIR, "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+MONTH_NAMES = ["一月","二月","三月","四月","五月","六月",
+               "七月","八月","九月","十月","十一月","十二月"]
 
 
-# ══════════════════════════════════════════════════════════
-#  数据库工具函数
-# ══════════════════════════════════════════════════════════
-
-def get_conn():
-    """获取数据库连接"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def td():
+    return date.today()
 
 
-def init_db():
-    """初始化数据库表结构"""
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS datasets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            description TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS columns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dataset_id INTEGER NOT NULL,
-            col_name TEXT NOT NULL,
-            col_type TEXT NOT NULL DEFAULT 'text',
-            col_order INTEGER DEFAULT 0,
-            FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE,
-            UNIQUE(dataset_id, col_name)
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            dataset_id INTEGER NOT NULL,
-            data TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
-        )
-    """)
-    conn.commit()
-    conn.close()
+def login_required(request: Request):
+    if not request.session.get("logged_in"):
+        raise HTTPException(status_code=303, detail="请先登录")
 
 
-def get_datasets():
-    """获取所有数据集"""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT d.*, (SELECT COUNT(*) FROM records WHERE dataset_id = d.id) as record_count "
-        "FROM datasets d ORDER BY d.created_at DESC"
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def create_dataset(name, description="", columns=None):
-    """创建数据集"""
-    conn = get_conn()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO datasets (name, description) VALUES (?, ?)", (name, description))
-        ds_id = cursor.lastrowid
-        if columns:
-            for i, col in enumerate(columns):
-                cursor.execute(
-                    "INSERT INTO columns (dataset_id, col_name, col_type, col_order) VALUES (?, ?, ?, ?)",
-                    (ds_id, col["name"], col["type"], i),
-                )
-        conn.commit()
-        return ds_id, None
-    except sqlite3.IntegrityError:
-        return None, f"数据集名称「{name}」已存在"
-    finally:
-        conn.close()
-
-
-def delete_dataset(ds_id):
-    """删除数据集"""
-    conn = get_conn()
-    conn.execute("DELETE FROM datasets WHERE id = ?", (ds_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_columns(ds_id):
-    """获取数据集的列定义"""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM columns WHERE dataset_id = ? ORDER BY col_order", (ds_id,)
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def add_column(ds_id, col_name, col_type):
-    """添加列"""
-    conn = get_conn()
-    try:
-        max_order = conn.execute(
-            "SELECT COALESCE(MAX(col_order), -1) as m FROM columns WHERE dataset_id = ?", (ds_id,)
-        ).fetchone()["m"]
-        conn.execute(
-            "INSERT INTO columns (dataset_id, col_name, col_type, col_order) VALUES (?, ?, ?, ?)",
-            (ds_id, col_name, col_type, max_order + 1),
-        )
-        conn.commit()
-        return True, None
-    except sqlite3.IntegrityError:
-        return False, f"列名「{col_name}」已存在"
-    finally:
-        conn.close()
-
-
-def delete_column(col_id):
-    """删除列"""
-    conn = get_conn()
-    conn.execute("DELETE FROM columns WHERE id = ?", (col_id,))
-    conn.commit()
-    conn.close()
-
-
-def add_record(ds_id, data_dict):
-    """添加记录"""
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO records (dataset_id, data) VALUES (?, ?)",
-        (ds_id, json.dumps(data_dict, ensure_ascii=False)),
+def get_or_create_tx(db, payment):
+    existing = db.query(Transaction).filter_by(related_payment_id=payment.id).first()
+    if existing:
+        return existing
+    tx = Transaction(
+        tx_type="income", category="rent", amount=payment.amount,
+        tx_date=payment.paid_date or td(),
+        description=f"租金 {payment.tenancy.room.room_number} ({payment.period_start}~{payment.period_end})",
+        room_id=payment.tenancy.room_id, related_payment_id=payment.id,
     )
-    conn.commit()
-    conn.close()
-
-
-def update_record(record_id, data_dict):
-    """更新记录"""
-    conn = get_conn()
-    conn.execute(
-        "UPDATE records SET data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (json.dumps(data_dict, ensure_ascii=False), record_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-def delete_record(record_id):
-    """删除记录"""
-    conn = get_conn()
-    conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_records(ds_id):
-    """获取数据集的所有记录"""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM records WHERE dataset_id = ? ORDER BY created_at DESC", (ds_id,)
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def records_to_dataframe(ds_id):
-    """将记录转换为 pandas DataFrame"""
-    columns = get_columns(ds_id)
-    records = get_records(ds_id)
-    if not records:
-        return pd.DataFrame()
-    col_names = [c["col_name"] for c in columns]
-    col_types = {c["col_name"]: c["col_type"] for c in columns}
-    data_rows = []
-    for r in records:
-        row_data = json.loads(r["data"])
-        row_data["_id"] = r["id"]
-        row_data["_created_at"] = r["created_at"]
-        data_rows.append(row_data)
-    df = pd.DataFrame(data_rows)
-    # 类型转换
-    for col in col_names:
-        if col in df.columns and col_types.get(col) == "number":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
-
-
-# ── 初始化数据库 ────────────────────────────────────────
-init_db()
-
-# ── 侧边栏导航 ──────────────────────────────────────────
-st.sidebar.title("📊 数据科分析面板")
-st.sidebar.markdown("---")
-
-page = st.sidebar.radio(
-    "导航",
-    ["📂 数据集管理", "📝 数据录入", "👁️ 数据浏览", "📈 数据分析", "⚙️ 数据集设置"],
-    label_visibility="collapsed",
-)
-
-st.sidebar.markdown("---")
-st.sidebar.caption(f"数据库路径: `{DB_PATH}`")
-
-
-# ══════════════════════════════════════════════════════════
-#  页面 1: 数据集管理
-# ══════════════════════════════════════════════════════════
-
-if page == "📂 数据集管理":
-    st.title("📂 数据集管理")
-
-    # 创建新数据集
-    with st.expander("➕ 创建新数据集", expanded=True):
-        col1, col2 = st.columns([2, 3])
-        with col1:
-            new_name = st.text_input("数据集名称", placeholder="例如：同程旅行财务数据")
-        with col2:
-            new_desc = st.text_input("描述（可选）", placeholder="数据集的简要说明")
-
-        st.markdown("**定义字段列**")
-        col_defs_container = st.container()
-
-        if "new_cols" not in st.session_state:
-            st.session_state.new_cols = [{"name": "", "type": "text"}]
-
-        def add_col_input():
-            st.session_state.new_cols.append({"name": "", "type": "text"})
-
-        def remove_col_input():
-            if len(st.session_state.new_cols) > 1:
-                st.session_state.new_cols.pop()
-
-        # 显示列定义输入
-        for i, col_def in enumerate(st.session_state.new_cols):
-            cols = st.columns([3, 2, 1])
-            with cols[0]:
-                st.session_state.new_cols[i]["name"] = st.text_input(
-                    f"列名 #{i+1}", value=col_def["name"], key=f"new_col_name_{i}", label_visibility="collapsed",
-                    placeholder="列名"
-                )
-            with cols[1]:
-                st.session_state.new_cols[i]["type"] = st.selectbox(
-                    f"类型 #{i+1}",
-                    ["text", "number", "date"],
-                    index=["text", "number", "date"].index(col_def["type"]),
-                    key=f"new_col_type_{i}",
-                    label_visibility="collapsed",
-                )
-            with cols[2]:
-                if i > 0:
-                    st.button("✕", key=f"remove_col_{i}", on_click=remove_col_input, use_container_width=True)
-
-        st.button("➕ 添加列", on_click=add_col_input, use_container_width=True)
-
-        if st.button("✅ 创建数据集", type="primary", use_container_width=True):
-            if not new_name.strip():
-                st.error("请输入数据集名称")
-            else:
-                valid_cols = [c for c in st.session_state.new_cols if c["name"].strip()]
-                if not valid_cols:
-                    st.error("请至少定义一个字段列")
-                else:
-                    ds_id, err = create_dataset(new_name.strip(), new_desc, valid_cols)
-                    if err:
-                        st.error(err)
-                    else:
-                        st.success(f"数据集「{new_name}」创建成功！")
-                        st.session_state.new_cols = [{"name": "", "type": "text"}]
-                        st.rerun()
-
-    # 已有数据集列表
-    st.markdown("---")
-    st.subheader("已有数据集")
-    datasets = get_datasets()
-    if not datasets:
-        st.info("还没有数据集，请先创建一个。")
-    else:
-        for ds in datasets:
-            with st.container(border=True):
-                cols = st.columns([3, 1, 1])
-                with cols[0]:
-                    st.markdown(f"**{ds['name']}**")
-                    if ds["description"]:
-                        st.caption(ds["description"])
-                with cols[1]:
-                    st.caption(f"📄 {ds['record_count']} 条记录")
-                with cols[2]:
-                    st.caption(f"🆔 #{ds['id']}")
-
-                # 选择进入该数据集
-                if st.button(f"进入「{ds['name']}」", key=f"enter_{ds['id']}", use_container_width=True):
-                    st.session_state["active_dataset"] = ds["id"]
-                    st.session_state["active_dataset_name"] = ds["name"]
-                    st.rerun()
-
-    # 快捷切换
-    if "active_dataset" in st.session_state:
-        st.sidebar.markdown("---")
-        st.sidebar.success(f"当前数据集: **{st.session_state.get('active_dataset_name', '')}**")
-
-
-# ══════════════════════════════════════════════════════════
-#  页面 2: 数据录入
-# ══════════════════════════════════════════════════════════
-
-elif page == "📝 数据录入":
-    st.title("📝 数据录入")
-
-    # 选择数据集
-    datasets = get_datasets()
-    if not datasets:
-        st.warning("暂无数据集，请先在「数据集管理」页面创建。")
-        st.stop()
-
-    ds_options = {ds["name"]: ds["id"] for ds in datasets}
-    default_name = st.session_state.get("active_dataset_name", list(ds_options.keys())[0])
-    default_idx = list(ds_options.keys()).index(default_name) if default_name in ds_options else 0
-
-    selected_name = st.selectbox("选择数据集", list(ds_options.keys()), index=default_idx)
-    ds_id = ds_options[selected_name]
-    st.session_state["active_dataset"] = ds_id
-    st.session_state["active_dataset_name"] = selected_name
-
-    columns = get_columns(ds_id)
-    if not columns:
-        st.warning("该数据集尚未定义字段列，请在「数据集设置」中添加。")
-        st.stop()
-
-    # 录入表单
-    st.markdown("---")
-    st.subheader("录入新记录")
-
-    input_data = {}
-    col_meta = {}
-    for col in columns:
-        col_meta[col["col_name"]] = col["col_type"]
-
-    with st.form("entry_form", clear_on_submit=True):
-        form_cols = st.columns(2)
-        for i, col in enumerate(columns):
-            with form_cols[i % 2]:
-                label = f"{col['col_name']} ({col['col_type']})"
-                if col["col_type"] == "number":
-                    input_data[col["col_name"]] = st.number_input(
-                        label, value=None, step=0.01, format="%f", key=f"inp_{col['id']}"
-                    )
-                elif col["col_type"] == "date":
-                    input_data[col["col_name"]] = st.date_input(label, key=f"inp_{col['id']}")
-                else:
-                    input_data[col["col_name"]] = st.text_input(label, key=f"inp_{col['id']}")
-
-        submitted = st.form_submit_button("📥 提交记录", type="primary", use_container_width=True)
-
-    if submitted:
-        # 清理空值
-        clean_data = {}
-        for k, v in input_data.items():
-            if v is not None and v != "":
-                if col_meta.get(k) == "date" and hasattr(v, "isoformat"):
-                    clean_data[k] = v.isoformat()
-                else:
-                    clean_data[k] = v
-        if not clean_data:
-            st.warning("请至少填写一个字段")
-        else:
-            add_record(ds_id, clean_data)
-            st.success("记录已保存！")
-            st.rerun()
-
-    # 最近录入的记录快速预览
-    st.markdown("---")
-    st.subheader("最近录入")
-    records = get_records(ds_id)
-    if records:
-        preview = records[:5]
-        for r in preview:
-            data = json.loads(r["data"])
-            with st.container(border=True):
-                st.caption(f"#{r['id']} — {r['created_at']}")
-                for k, v in data.items():
-                    st.write(f"**{k}**: {v}")
-    else:
-        st.info("暂无记录")
-
-
-# ══════════════════════════════════════════════════════════
-#  页面 3: 数据浏览
-# ══════════════════════════════════════════════════════════
-
-elif page == "👁️ 数据浏览":
-    st.title("👁️ 数据浏览")
-
-    datasets = get_datasets()
-    if not datasets:
-        st.warning("暂无数据集")
-        st.stop()
-
-    ds_options = {ds["name"]: ds["id"] for ds in datasets}
-    default_name = st.session_state.get("active_dataset_name", list(ds_options.keys())[0])
-    default_idx = list(ds_options.keys()).index(default_name) if default_name in ds_options else 0
-
-    selected_name = st.selectbox("选择数据集", list(ds_options.keys()), index=default_idx,
-                                 key="browse_dataset_select")
-    ds_id = ds_options[selected_name]
-    st.session_state["active_dataset"] = ds_id
-    st.session_state["active_dataset_name"] = selected_name
-
-    df = records_to_dataframe(ds_id)
-    columns = get_columns(ds_id)
-    col_names = [c["col_name"] for c in columns]
-
-    if df.empty:
-        st.info("该数据集暂无记录")
-        st.stop()
-
-    # 筛选器
-    with st.expander("🔍 筛选条件", expanded=False):
-        filters = {}
-        for col in columns:
-            if col["col_type"] == "number":
-                vals = pd.to_numeric(df[col["col_name"]], errors="coerce").dropna()
-                if not vals.empty:
-                    min_v, max_v = float(vals.min()), float(vals.max())
-                    if min_v < max_v:
-                        f_range = st.slider(
-                            f"{col['col_name']} 范围",
-                            min_value=min_v, max_value=max_v,
-                            value=(min_v, max_v), key=f"filter_{col['id']}"
-                        )
-                        filters[col["col_name"]] = f_range
-            elif col["col_type"] == "text":
-                uniq = df[col["col_name"]].dropna().unique().tolist()
-                if uniq:
-                    selected = st.multiselect(
-                        f"{col['col_name']} 筛选",
-                        options=sorted(uniq), key=f"filter_{col['id']}"
-                    )
-                    if selected:
-                        filters[col["col_name"]] = selected
-
-        # 应用筛选
-        filtered_df = df.copy()
-        for col_name, condition in filters.items():
-            if isinstance(condition, tuple):
-                filtered_df = filtered_df[
-                    pd.to_numeric(filtered_df[col_name], errors="coerce").between(condition[0], condition[1])
-                ]
-            elif isinstance(condition, list):
-                filtered_df = filtered_df[filtered_df[col_name].isin(condition)]
-
-    # 显示表格
-    display_cols = col_names + ["_created_at"]
-    available_cols = [c for c in display_cols if c in filtered_df.columns]
-
-    st.caption(f"共 {len(filtered_df)} 条记录（筛选后）")
-    st.dataframe(
-        filtered_df[available_cols].rename(columns={"_created_at": "创建时间"}),
-        use_container_width=True,
-        height=400,
-        hide_index=True,
-    )
-
-    # 导出
-    with st.expander("📥 导出数据"):
-        export_format = st.radio("导出格式", ["CSV", "Excel"], horizontal=True)
-        if st.button("导出"):
-            export_df = filtered_df[available_cols].rename(columns={"_created_at": "创建时间"})
-            if export_format == "CSV":
-                csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "⬇ 下载 CSV",
-                    csv_data,
-                    file_name=f"{selected_name}_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                )
-            else:
-                output_path = os.path.join(DB_DIR, f"{selected_name}_export.xlsx")
-                export_df.to_excel(output_path, index=False)
-                with open(output_path, "rb") as f:
-                    st.download_button(
-                        "⬇ 下载 Excel",
-                        f,
-                        file_name=f"{selected_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-
-    # 批量删除
-    with st.expander("🗑️ 删除记录"):
-        st.warning("此操作不可撤销！")
-        record_ids = filtered_df["_id"].tolist()
-        if record_ids:
-            ids_to_delete = st.multiselect(
-                "选择要删除的记录 (ID)",
-                options=record_ids,
-                format_func=lambda x: f"记录 #{x}",
-            )
-            if ids_to_delete and st.button("删除选中记录", type="primary"):
-                for rid in ids_to_delete:
-                    delete_record(int(rid))
-                st.success(f"已删除 {len(ids_to_delete)} 条记录")
-                st.rerun()
-
-
-# ══════════════════════════════════════════════════════════
-#  页面 4: 数据分析
-# ══════════════════════════════════════════════════════════
-
-elif page == "📈 数据分析":
-    st.title("📈 数据分析与可视化")
-
-    datasets = get_datasets()
-    if not datasets:
-        st.warning("暂无数据集")
-        st.stop()
-
-    ds_options = {ds["name"]: ds["id"] for ds in datasets}
-    default_name = st.session_state.get("active_dataset_name", list(ds_options.keys())[0])
-    default_idx = list(ds_options.keys()).index(default_name) if default_name in ds_options else 0
-
-    selected_name = st.selectbox("选择数据集", list(ds_options.keys()), index=default_idx,
-                                 key="analysis_dataset_select")
-    ds_id = ds_options[selected_name]
-    st.session_state["active_dataset"] = ds_id
-    st.session_state["active_dataset_name"] = selected_name
-
-    df = records_to_dataframe(ds_id)
-    columns = get_columns(ds_id)
-    num_cols = [c["col_name"] for c in columns if c["col_type"] == "number"]
-    text_cols = [c["col_name"] for c in columns if c["col_type"] == "text"]
-    date_cols = [c["col_name"] for c in columns if c["col_type"] == "date"]
-
-    if df.empty:
-        st.info("该数据集暂无数据，请先录入一些记录")
-        st.stop()
-
-    # ── 统计摘要 ──
-    tab_summary, tab_chart, tab_corr = st.tabs(["📋 统计摘要", "📊 图表分析", "🔗 相关性分析"])
-
-    with tab_summary:
-        st.subheader("描述性统计")
-        if num_cols:
-            numeric_df = df[num_cols].select_dtypes(include="number")
-            if not numeric_df.empty:
-                stats = numeric_df.describe().T
-                stats["count"] = stats["count"].astype(int)
-                stats["缺失值"] = len(numeric_df) - stats["count"]
-                st.dataframe(stats, use_container_width=True)
-            else:
-                st.info("暂无数值型列可统计")
-        else:
-            st.info("该数据集未定义数值型字段")
-
-        # 数据概览
-        st.subheader("数据概览")
-        overview = pd.DataFrame({
-            "指标": ["总记录数", "数值列数", "文本列数", "日期列数"],
-            "值": [len(df), len(num_cols), len(text_cols), len(date_cols)],
-        })
-        st.dataframe(overview, use_container_width=True, hide_index=True)
-
-    with tab_chart:
-        st.subheader("图表生成")
-
-        if not num_cols:
-            st.warning("需要至少一个数值型字段才能生成图表。请在「数据集设置」中添加数值型字段。")
-        else:
-            chart_type = st.selectbox("图表类型", ["折线图", "柱状图", "散点图", "箱线图", "直方图"])
-
-            x_col = st.selectbox("X 轴", [""] + list(df.columns), index=0)
-            y_col = st.selectbox("Y 轴（数值）", [""] + num_cols, index=0)
-            color_col = st.selectbox("颜色分组（可选）", ["无"] + text_cols, index=0)
-
-            if x_col and y_col and x_col != y_col:
-                try:
-                    if chart_type == "折线图":
-                        fig = px.line(df, x=x_col, y=y_col, color=None if color_col == "无" else color_col,
-                                      title=f"{y_col} 按 {x_col} 变化")
-                    elif chart_type == "柱状图":
-                        fig = px.bar(df, x=x_col, y=y_col, color=None if color_col == "无" else color_col,
-                                     title=f"{y_col} 按 {x_col} 分布", barmode="group")
-                    elif chart_type == "散点图":
-                        fig = px.scatter(df, x=x_col, y=y_col, color=None if color_col == "无" else color_col,
-                                         title=f"{y_col} vs {x_col}", trendline="ols")
-                    elif chart_type == "箱线图":
-                        fig = px.box(df, x=x_col if color_col == "无" else None,
-                                     y=y_col, color=None if color_col == "无" else color_col,
-                                     title=f"{y_col} 箱线图")
-                    else:  # 直方图
-                        fig = px.histogram(df, x=y_col, color=None if color_col == "无" else color_col,
-                                           title=f"{y_col} 分布", nbins=20)
-
-                    fig.update_layout(height=500, margin=dict(l=40, r=40, t=40, b=40))
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"生成图表时出错: {e}")
-            else:
-                st.info("请选择 X 轴和 Y 轴（数值）来生成图表")
-
-        # 饼图（基于文本列）
-        if text_cols:
-            st.markdown("---")
-            st.subheader("类别分布（饼图）")
-            pie_col = st.selectbox("选择分类字段", text_cols, key="pie_col")
-            if pie_col:
-                value_counts = df[pie_col].value_counts()
-                fig = px.pie(
-                    values=value_counts.values,
-                    names=value_counts.index,
-                    title=f"{pie_col} 分布",
-                )
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
-
-    with tab_corr:
-        st.subheader("相关性分析")
-        if len(num_cols) >= 2:
-            numeric_df = df[num_cols].select_dtypes(include="number")
-            if numeric_df.shape[1] >= 2 and numeric_df.shape[0] >= 3:
-                corr = numeric_df.corr()
-                fig = px.imshow(
-                    corr,
-                    text_auto=".3f",
-                    color_continuous_scale="RdBu_r",
-                    title="相关系数矩阵",
-                    aspect="auto",
-                )
-                fig.update_layout(height=500)
-                st.plotly_chart(fig, use_container_width=True)
-
-                st.subheader("详细相关系数")
-                # 展开上三角矩阵
-                pairs = []
-                for i in range(len(corr.columns)):
-                    for j in range(i + 1, len(corr.columns)):
-                        pairs.append({
-                            "变量1": corr.columns[i],
-                            "变量2": corr.columns[j],
-                            "相关系数": f"{corr.iloc[i, j]:.4f}",
-                            "相关强度": (
-                                "强" if abs(corr.iloc[i, j]) > 0.7
-                                else "中" if abs(corr.iloc[i, j]) > 0.4
-                                else "弱"
-                            ),
-                        })
-                st.dataframe(pd.DataFrame(pairs), use_container_width=True, hide_index=True)
-            else:
-                st.info("需要至少 2 个数值列和 3 条记录才能计算相关性")
-        else:
-            st.info("需要至少 2 个数值型字段")
-
-
-# ══════════════════════════════════════════════════════════
-#  页面 5: 数据集设置
-# ══════════════════════════════════════════════════════════
-
-elif page == "⚙️ 数据集设置":
-    st.title("⚙️ 数据集设置")
-
-    datasets = get_datasets()
-    if not datasets:
-        st.warning("暂无数据集")
-        st.stop()
-
-    ds_options = {ds["name"]: f"{ds['id']}" for ds in datasets}
-    default_name = st.session_state.get("active_dataset_name", list(ds_options.keys())[0])
-    default_idx = list(ds_options.keys()).index(default_name) if default_name in ds_options else 0
-
-    selected_name = st.selectbox("选择数据集", list(ds_options.keys()), index=default_idx,
-                                 key="settings_dataset_select")
-    ds_id = ds_options[selected_name]
-
-    columns = get_columns(ds_id)
-    records = get_records(ds_id)
-
-    # 数据集信息
-    with st.container(border=True):
-        st.markdown(f"**数据集**: {selected_name}  |  字段数: {len(columns)}  |  记录数: {len(records)}")
-
-    # 管理字段列
-    st.subheader("字段列管理")
-    for col in columns:
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 2, 1])
-            with c1:
-                st.write(f"**{col['col_name']}**")
-            with c2:
-                st.caption(f"类型: {col['col_type']}")
-            with c3:
-                if st.button("删除", key=f"del_col_{col['id']}"):
-                    delete_column(col["id"])
-                    st.rerun()
-
-    # 添加新列
-    with st.expander("➕ 添加新字段"):
-        new_col_name = st.text_input("字段名", key="new_setting_col_name")
-        new_col_type = st.selectbox("字段类型", ["text", "number", "date"], key="new_setting_col_type")
-        if st.button("添加字段", use_container_width=True):
-            if new_col_name.strip():
-                success, err = add_column(ds_id, new_col_name.strip(), new_col_type)
-                if success:
-                    st.success(f"字段「{new_col_name}」已添加")
-                    st.rerun()
-                else:
-                    st.error(err)
-            else:
-                st.error("请输入字段名")
-
-    # 删除数据集
-    st.markdown("---")
-    with st.expander("⚠️ 危险操作"):
-        st.warning("删除数据集将同时删除所有数据和字段定义，此操作不可撤销！")
-        confirm = st.text_input("请输入数据集名称确认删除", placeholder=selected_name)
-        if confirm == selected_name:
-            if st.button("🗑️ 确认删除数据集", type="primary", use_container_width=True):
-                delete_dataset(ds_id)
-                st.success("数据集已删除")
-                if "active_dataset" in st.session_state:
-                    del st.session_state["active_dataset"]
-                    del st.session_state["active_dataset_name"]
-                st.rerun()
-        elif confirm:
-            st.error("名称不匹配，请输入完整的数据集名称")
-
-
-# ── 页脚 ────────────────────────────────────────────────
-st.sidebar.markdown("---")
-st.sidebar.caption("数据科分析面板 v1.0 | 基于 Streamlit")
+    db.add(tx)
+    db.commit()
+    return tx
+
+
+def render_html(tpl, request, **kw):
+    kw["request"] = request
+    kw["today"] = td
+    return templates.TemplateResponse(request, tpl, kw)
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+
+# ── 登录 ──
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    return render_html("login.html", request)
+
+
+@app.post("/login")
+def login_post(request: Request, password: str = Form(...)):
+    pw = os.getenv("ADMIN_PASSWORD", "888888")
+    if password == pw:
+        request.session["logged_in"] = True
+        return RedirectResponse("/", status_code=303)
+    return render_html("login.html", request, error="密码错误")
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+# ── 仪表盘 ──
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(request: Request, db: Session = Depends(get_db)):
+    login_required(request)
+    rooms = db.query(Room).all()
+    total = len(rooms)
+    occupied = sum(1 for r in rooms if r.status == "occupied")
+    vacant = total - occupied
+    now = td()
+    ms = now.replace(day=1)
+    nm = now.replace(year=now.year+1, month=1, day=1) if now.month == 12 else now.replace(month=now.month+1, day=1)
+    expected = db.query(func.sum(RentPayment.amount)).filter(
+        RentPayment.status == "pending", RentPayment.period_start >= ms, RentPayment.period_start < nm).scalar() or 0
+    paid = db.query(func.sum(RentPayment.amount)).filter(
+        RentPayment.status == "paid", RentPayment.paid_date >= ms, RentPayment.paid_date < nm).scalar() or 0
+    wd = now + timedelta(days=7)
+    expiring = db.query(Tenancy).filter(Tenancy.status == "active", Tenancy.end_date <= wd, Tenancy.end_date >= now).all()
+    pending_r = db.query(Repair).filter(Repair.status == "pending").count()
+    floors = {}
+    for r in rooms:
+        floors.setdefault(r.floor, []).append(r)
+    return render_html("dashboard.html", request, floors=sorted(floors.items()),
+                        total_rooms=total, occupied=occupied, vacant=vacant,
+                        expected_rent=expected, paid_rent=paid,
+                        expiring_leases=expiring, pending_repairs=pending_r)
+
+
+# ── 房间 ──
+
+@app.get("/rooms", response_class=HTMLResponse)
+def rooms_page(request: Request, db: Session = Depends(get_db)):
+    login_required(request)
+    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
+    floors = {}
+    for r in rooms:
+        floors.setdefault(r.floor, []).append(r)
+    return render_html("rooms.html", request, floors=sorted(floors.items()))
+
+
+@app.get("/rooms/{room_id}", response_class=HTMLResponse)
+def room_detail(request: Request, room_id: int, db: Session = Depends(get_db)):
+    login_required(request)
+    room = db.query(Room).get(room_id)
+    if not room:
+        raise HTTPException(404)
+    tenancy = room.current_tenancy()
+    bills = db.query(UtilityBill).filter_by(room_id=room_id).order_by(UtilityBill.month.desc()).limit(12).all()
+    repairs = db.query(Repair).filter_by(room_id=room_id).order_by(Repair.reported_date.desc()).all()
+    return render_html("room_detail.html", request, room=room, tenancy=tenancy, bills=bills, repairs=repairs)
+
+
+@app.post("/rooms/{room_id}/rent")
+def update_rent(room_id: int, monthly_rent: float = Form(...), db: Session = Depends(get_db)):
+    room = db.query(Room).get(room_id)
+    if room:
+        room.monthly_rent = monthly_rent
+        db.commit()
+    return RedirectResponse(f"/rooms/{room_id}", status_code=303)
+
+
+# ── 租客 ──
+
+@app.get("/tenants", response_class=HTMLResponse)
+def tenants_page(request: Request, q: str = "", db: Session = Depends(get_db)):
+    login_required(request)
+    query = db.query(Tenant).order_by(Tenant.created_at.desc())
+    if q:
+        query = query.filter(Tenant.name.contains(q) | Tenant.phone.contains(q))
+    return render_html("tenants.html", request, tenants=query.all(), q=q)
+
+
+@app.get("/tenants/create", response_class=HTMLResponse)
+def tenant_create_page(request: Request):
+    login_required(request)
+    return render_html("tenant_form.html", request, tenant=None)
+
+
+@app.post("/tenants/create")
+def tenant_create(request: Request, name: str = Form(...), id_number: str = Form(""),
+                  phone: str = Form(""), db: Session = Depends(get_db)):
+    login_required(request)
+    db.add(Tenant(name=name, id_number=id_number, phone=phone))
+    db.commit()
+    return RedirectResponse("/tenants", status_code=303)
+
+
+# ── 租约 ──
+
+@app.get("/leases", response_class=HTMLResponse)
+def leases_page(request: Request, status: str = "active", db: Session = Depends(get_db)):
+    login_required(request)
+    query = db.query(Tenancy).order_by(Tenancy.start_date.desc())
+    if status != "all":
+        query = query.filter(Tenancy.status == status)
+    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
+    tenants = db.query(Tenant).order_by(Tenant.name).all()
+    return render_html("leases.html", request, leases=query.all(), rooms=rooms, tenants=tenants, status=status)
+
+
+@app.post("/leases/create")
+def lease_create(request: Request, room_id: int = Form(...), tenant_ids: str = Form(...),
+                 lease_type: str = Form("monthly"), monthly_rent: float = Form(...),
+                 deposit: float = Form(...), deposit_paid: bool = Form(False),
+                 start_date: str = Form(...), end_date: str = Form(""), notes: str = Form(""),
+                 db: Session = Depends(get_db)):
+    login_required(request)
+    ids = [int(x) for x in tenant_ids.split(",") if x.strip()]
+    tenancy = Tenancy(room_id=room_id, lease_type=lease_type, monthly_rent=monthly_rent,
+                      deposit=deposit, deposit_paid=deposit_paid,
+                      start_date=date.fromisoformat(start_date),
+                      end_date=date.fromisoformat(end_date) if end_date else None, notes=notes)
+    db.add(tenancy)
+    db.flush()
+    for tid in ids:
+        db.add(TenantTenancy(tenancy_id=tenancy.id, tenant_id=tid))
+    room = db.query(Room).get(room_id)
+    if room:
+        room.status = "occupied"
+        room.monthly_rent = monthly_rent
+    db.commit()
+    return RedirectResponse("/leases", status_code=303)
+
+
+@app.post("/leases/{lease_id}/terminate")
+def lease_terminate(lease_id: int, db: Session = Depends(get_db)):
+    tenancy = db.query(Tenancy).get(lease_id)
+    if tenancy:
+        tenancy.status = "terminated"
+        tenancy.end_date = td()
+        room = tenancy.room
+        if room:
+            room.status = "vacant"
+        db.commit()
+    return RedirectResponse("/leases", status_code=303)
+
+
+# ── 租金 ──
+
+@app.get("/payments", response_class=HTMLResponse)
+def payments_page(request: Request, status: str = "pending", month: str = "", db: Session = Depends(get_db)):
+    login_required(request)
+    query = db.query(RentPayment).order_by(RentPayment.period_start.desc())
+    if status != "all":
+        query = query.filter(RentPayment.status == status)
+    if month:
+        query = query.filter(RentPayment.period_start.startswith(f"{month}-"))
+    leases = db.query(Tenancy).filter_by(status="active").all()
+    return render_html("payments.html", request, payments=query.all(), leases=leases, status=status, month=month)
+
+
+@app.post("/payments/create")
+def payment_create(request: Request, tenancy_id: int = Form(...),
+                   period_start: str = Form(...), period_end: str = Form(...),
+                   amount: float = Form(...), paid: bool = Form(False), db: Session = Depends(get_db)):
+    login_required(request)
+    p = RentPayment(tenancy_id=tenancy_id, period_start=date.fromisoformat(period_start),
+                    period_end=date.fromisoformat(period_end), amount=amount,
+                    status="paid" if paid else "pending", paid_date=td() if paid else None)
+    db.add(p)
+    db.flush()
+    if paid:
+        get_or_create_tx(db, p)
+    db.commit()
+    return RedirectResponse("/payments", status_code=303)
+
+
+@app.post("/payments/{pid}/pay")
+def payment_pay(pid: int, db: Session = Depends(get_db)):
+    p = db.query(RentPayment).get(pid)
+    if p:
+        p.status = "paid"
+        p.paid_date = td()
+        get_or_create_tx(db, p)
+        db.commit()
+    return RedirectResponse("/payments", status_code=303)
+
+
+@app.post("/payments/{pid}/unpay")
+def payment_unpay(pid: int, db: Session = Depends(get_db)):
+    p = db.query(RentPayment).get(pid)
+    if p:
+        p.status = "pending"
+        p.paid_date = None
+        db.query(Transaction).filter_by(related_payment_id=pid).delete()
+        db.commit()
+    return RedirectResponse("/payments", status_code=303)
+
+
+@app.get("/payments/batch")
+def batch_payment(request: Request, db: Session = Depends(get_db)):
+    login_required(request)
+    now = td()
+    ms = now.replace(day=1)
+    nm = now.replace(year=now.year+1, month=1, day=1) if now.month == 12 else now.replace(month=now.month+1, day=1)
+    created = skipped = 0
+    for lease in db.query(Tenancy).filter_by(status="active").all():
+        if db.query(RentPayment).filter(RentPayment.tenancy_id == lease.id, RentPayment.period_start == ms).first():
+            skipped += 1
+            continue
+        db.add(RentPayment(tenancy_id=lease.id, period_start=ms, period_end=nm - timedelta(days=1),
+                           amount=lease.monthly_rent, status="pending"))
+        created += 1
+    db.commit()
+    return JSONResponse({"created": created, "skipped": skipped})
+
+
+# ── 水电 ──
+
+@app.get("/utilities", response_class=HTMLResponse)
+def utilities_page(request: Request, month: str = "", db: Session = Depends(get_db)):
+    login_required(request)
+    query = db.query(UtilityBill).order_by(UtilityBill.month.desc())
+    if month:
+        query = query.filter(UtilityBill.month == month)
+    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
+    months = [m[0] for m in db.query(UtilityBill.month).distinct().order_by(UtilityBill.month.desc()).all()]
+    return render_html("utilities.html", request, bills=query.all(), rooms=rooms, months=months, current_month=month)
+
+
+@app.post("/utilities/create")
+def utility_create(request: Request, room_id: int = Form(...), month: str = Form(...),
+                   electricity_reading: float = Form(0), electricity_usage: float = Form(0),
+                   tenant_count: int = Form(0), db: Session = Depends(get_db)):
+    login_required(request)
+    ec = electricity_usage * 1.0
+    wc = tenant_count * 70
+    db.add(UtilityBill(room_id=room_id, month=month, electricity_reading=electricity_reading,
+                       electricity_usage=electricity_usage, electricity_cost=ec,
+                       tenant_count=tenant_count, water_cost=wc, total=ec + wc))
+    db.commit()
+    return RedirectResponse("/utilities", status_code=303)
+
+
+@app.post("/utilities/{bid}/pay")
+def utility_pay(bid: int, db: Session = Depends(get_db)):
+    bill = db.query(UtilityBill).get(bid)
+    if bill:
+        bill.paid = True
+        bill.paid_date = td()
+        db.add(Transaction(tx_type="income", category="electricity" if bill.electricity_cost > 0 else "water",
+                           amount=bill.total, tx_date=td(),
+                           description=f"水电费 {bill.room.room_number} ({bill.month})", room_id=bill.room_id))
+        db.commit()
+    return RedirectResponse("/utilities", status_code=303)
+
+
+# ── 维修 ──
+
+@app.get("/repairs", response_class=HTMLResponse)
+def repairs_page(request: Request, status: str = "all", db: Session = Depends(get_db)):
+    login_required(request)
+    query = db.query(Repair).order_by(Repair.reported_date.desc())
+    if status != "all":
+        query = query.filter(Repair.status == status)
+    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
+    return render_html("repairs.html", request, repairs=query.all(), rooms=rooms, status=status)
+
+
+@app.post("/repairs/create")
+def repair_create(request: Request, room_id: int = Form(...), description: str = Form(...),
+                  cost: float = Form(0), db: Session = Depends(get_db)):
+    login_required(request)
+    db.add(Repair(room_id=room_id, description=description, reported_date=td(), cost=cost))
+    db.commit()
+    return RedirectResponse("/repairs", status_code=303)
+
+
+@app.post("/repairs/{rid}/complete")
+def repair_complete(rid: int, cost: float = Form(0), notes: str = Form(""), db: Session = Depends(get_db)):
+    r = db.query(Repair).get(rid)
+    if r:
+        r.status = "completed"
+        r.completed_date = td()
+        r.cost = cost
+        r.notes = notes
+        if cost > 0:
+            db.add(Transaction(tx_type="expense", category="repair", amount=cost, tx_date=td(),
+                               description=f"维修 {r.room.room_number}: {r.description}", room_id=r.room_id))
+        db.commit()
+    return RedirectResponse("/repairs", status_code=303)
+
+
+# ── 财务报表 ──
+
+@app.get("/finance", response_class=HTMLResponse)
+def finance_page(request: Request, year: int = 0, db: Session = Depends(get_db)):
+    login_required(request)
+    if not year:
+        year = td().year
+    monthly = []
+    for m in range(1, 13):
+        ms = f"{year}-{m:02d}"
+        inc = db.query(func.sum(Transaction.amount)).filter(
+            Transaction.tx_type == "income", func.strftime("%Y-%m", Transaction.tx_date) == ms).scalar() or 0
+        exp = db.query(func.sum(Transaction.amount)).filter(
+            Transaction.tx_type == "expense", func.strftime("%Y-%m", Transaction.tx_date) == ms).scalar() or 0
+        monthly.append({"month": MONTH_NAMES[m-1], "income": inc, "expense": exp, "profit": inc - exp})
+    ys = str(year)
+    ti = db.query(func.sum(Transaction.amount)).filter(
+        Transaction.tx_type == "income", func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
+    te = db.query(func.sum(Transaction.amount)).filter(
+        Transaction.tx_type == "expense", func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
+    ri = db.query(func.sum(Transaction.amount)).filter(
+        Transaction.tx_type == "income", Transaction.category == "rent",
+        func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
+    ui = db.query(func.sum(Transaction.amount)).filter(
+        Transaction.tx_type == "income", Transaction.category.in_(["electricity", "water"]),
+        func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
+    years = [r[0] for r in db.query(func.strftime("%Y", Transaction.tx_date)).distinct().order_by(
+        func.strftime("%Y", Transaction.tx_date).desc()).all()]
+    return render_html("finance.html", request, year=year, years=years, monthly_data=monthly,
+                        total_income=ti, total_expense=te, total_profit=ti - te,
+                        rent_income=ri, utility_income=ui)
+
+
+# ── 账单导出 ──
+
+@app.get("/export/{payment_id}", response_class=HTMLResponse)
+def export_bill(request: Request, payment_id: int, db: Session = Depends(get_db)):
+    login_required(request)
+    payment = db.query(RentPayment).get(payment_id)
+    if not payment:
+        raise HTTPException(404)
+    return render_html("bill.html", request, p=payment)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
