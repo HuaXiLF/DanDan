@@ -1,418 +1,719 @@
-"""出租屋管理站 — FastAPI 主应用"""
+"""
+出租屋管理站 — Streamlit 版
+支持手机端操作，一键部署到 Streamlit Cloud
+"""
+import sqlite3
+import json
 import os
+import pandas as pd
 from datetime import date, datetime, timedelta
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from starlette.middleware.sessions import SessionMiddleware
+import streamlit as st
 
-from models import (
-    init_db, get_db, Room, Tenant, Tenancy, TenantTenancy,
-    RentPayment, UtilityBill, Repair, Transaction,
-)
+st.set_page_config(page_title="出租屋管理站", page_icon="🏠", layout="wide",
+                   initial_sidebar_state="collapsed")
 
-app = FastAPI(title="出租屋管理站")
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "dan-dan-secret-2024"))
+# ── CSS 定制（手机端优化） ──
+st.markdown("""
+<style>
+    /* 隐藏 Streamlit 默认元素 */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stApp {margin-top: -60px; padding-top: 0;}
+    .block-container {padding-top: 0.5rem; padding-bottom: 0.5rem; max-width: 100%;}
 
-BASE_DIR = os.path.dirname(__file__)
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
-templates.env.cache = None
-static_dir = os.path.join(BASE_DIR, "static")
-os.makedirs(static_dir, exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    /* 导航标签 */
+    .nav-tabs {display: flex; overflow-x: auto; gap: 4px; padding: 4px 0; margin-bottom: 8px;
+               -webkit-overflow-scrolling: touch; scrollbar-width: none;}
+    .nav-tabs::-webkit-scrollbar {display: none;}
+    .nav-tab {flex-shrink: 0; padding: 8px 14px; border-radius: 10px; font-size: 13px;
+              font-weight: 500; white-space: nowrap; cursor: pointer; border: none;
+              background: #f3f4f6; color: #6b7280; transition: all 0.15s;}
+    .nav-tab.active {background: #1e40af; color: white;}
+    .nav-tab:active {transform: scale(0.95);}
 
-MONTH_NAMES = ["一月","二月","三月","四月","五月","六月",
-               "七月","八月","九月","十月","十一月","十二月"]
+    /* 卡片 */
+    .card {background: white; border-radius: 14px; padding: 14px; margin-bottom: 10px;
+           box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+           border: 1px solid #f3f4f6;}
+    .card-title {font-size: 13px; color: #6b7280; margin-bottom: 6px; font-weight: 500;}
+    .card-value {font-size: 22px; font-weight: 700; color: #1e3a8a;}
+    .stat-grid {display: grid; gap: 8px; margin-bottom: 12px;}
 
+    /* 房间格子 */
+    .room-grid {display: grid; gap: 6px;}
+    .room-cell {padding: 8px 4px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: 600;
+                cursor: pointer; border: 1px solid #e5e7eb; text-decoration: none; display: block;}
+    .room-cell.occupied {background: #ecfdf5; border-color: #a7f3d0; color: #065f46;}
+    .room-cell.vacant {background: #f9fafb; border-color: #e5e7eb; color: #9ca3af;}
 
-def td():
-    return date.today()
+    /* 标记 */
+    .badge {display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500;}
+    .badge-green {background: #d1fae5; color: #065f46;}
+    .badge-red {background: #fee2e2; color: #991b1b;}
+    .badge-yellow {background: #fef3c7; color: #92400e;}
+    .badge-blue {background: #dbeafe; color: #1e40af;}
+    .badge-gray {background: #f3f4f6; color: #6b7280;}
 
+    /* 表单按钮 */
+    .stButton button {width: 100%; border-radius: 10px; padding: 8px 0; font-size: 14px; font-weight: 500;}
+    .stTextInput input, .stSelectbox div, .stDateInput input, .stNumberInput input {
+        border-radius: 10px !important; font-size: 14px !important;}
+    div[data-testid="stForm"] {border: none !important; padding: 0 !important;}
 
-def login_required(request: Request):
-    if not request.session.get("logged_in"):
-        raise HTTPException(status_code=303, detail="请先登录")
+    /* 弹窗覆盖 */
+    .modal-overlay {position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1000;
+                    display: flex; align-items: flex-end; justify-content: center;}
+    .modal-content {background: white; border-radius: 20px 20px 0 0; width: 100%; max-width: 500px;
+                    max-height: 85vh; overflow-y: auto; padding: 20px; animation: slideUp 0.25s ease;}
+    @keyframes slideUp {from {transform: translateY(100%);} to {transform: translateY(0);}}
 
+    /* 底部安全区 */
+    .mb-safe {margin-bottom: 20px;}
+</style>
+""", unsafe_allow_html=True)
 
-def get_or_create_tx(db, payment):
-    existing = db.query(Transaction).filter_by(related_payment_id=payment.id).first()
-    if existing:
-        return existing
-    tx = Transaction(
-        tx_type="income", category="rent", amount=payment.amount,
-        tx_date=payment.paid_date or td(),
-        description=f"租金 {payment.tenancy.room.room_number} ({payment.period_start}~{payment.period_end})",
-        room_id=payment.tenancy.room_id, related_payment_id=payment.id,
-    )
-    db.add(tx)
-    db.commit()
-    return tx
-
-
-def render_html(tpl, request, **kw):
-    kw["request"] = request
-    kw["today"] = td
-    return templates.TemplateResponse(request, tpl, kw)
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-
-
-# ── 登录 ──
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    return render_html("login.html", request)
-
-
-@app.post("/login")
-def login_post(request: Request, password: str = Form(...)):
-    pw = os.getenv("ADMIN_PASSWORD", "888888")
-    if password == pw:
-        request.session["logged_in"] = True
-        return RedirectResponse("/", status_code=303)
-    return render_html("login.html", request, error="密码错误")
+# ── 数据库 ───────────────────────────────────────────────
+DB_DIR = os.path.join(os.path.dirname(__file__), "data")
+os.makedirs(DB_DIR, exist_ok=True)
+DB_PATH = os.path.join(DB_DIR, "rental.db")
 
 
-@app.get("/logout")
-def logout(request: Request):
-    request.session.clear()
-    return RedirectResponse("/login", status_code=303)
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 
-# ── 仪表盘 ──
+def init_db():
+    conn = get_conn()
+    c = conn.cursor()
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_number TEXT NOT NULL UNIQUE,
+            floor INTEGER NOT NULL,
+            monthly_rent REAL DEFAULT 0,
+            status TEXT DEFAULT 'vacant'
+        );
+        CREATE TABLE IF NOT EXISTS tenants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            id_number TEXT DEFAULT '',
+            phone TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS tenancies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            lease_type TEXT NOT NULL,
+            monthly_rent REAL NOT NULL,
+            deposit REAL DEFAULT 0,
+            deposit_paid INTEGER DEFAULT 0,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            status TEXT DEFAULT 'active',
+            notes TEXT DEFAULT '',
+            FOREIGN KEY (room_id) REFERENCES rooms(id)
+        );
+        CREATE TABLE IF NOT EXISTS tenant_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenancy_id INTEGER NOT NULL,
+            tenant_id INTEGER NOT NULL,
+            FOREIGN KEY (tenancy_id) REFERENCES tenancies(id),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        );
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenancy_id INTEGER NOT NULL,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            amount REAL NOT NULL,
+            paid_date TEXT,
+            status TEXT DEFAULT 'pending',
+            FOREIGN KEY (tenancy_id) REFERENCES tenancies(id)
+        );
+        CREATE TABLE IF NOT EXISTS utility_bills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            month TEXT NOT NULL,
+            electricity_reading REAL DEFAULT 0,
+            electricity_usage REAL DEFAULT 0,
+            electricity_cost REAL DEFAULT 0,
+            tenant_count INTEGER DEFAULT 0,
+            water_cost REAL DEFAULT 0,
+            total REAL DEFAULT 0,
+            paid INTEGER DEFAULT 0,
+            paid_date TEXT,
+            FOREIGN KEY (room_id) REFERENCES rooms(id)
+        );
+        CREATE TABLE IF NOT EXISTS repairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            reported_date TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            cost REAL DEFAULT 0,
+            completed_date TEXT,
+            notes TEXT DEFAULT '',
+            FOREIGN KEY (room_id) REFERENCES rooms(id)
+        );
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tx_type TEXT NOT NULL,
+            category TEXT NOT NULL,
+            amount REAL NOT NULL,
+            tx_date TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            room_id INTEGER,
+            FOREIGN KEY (room_id) REFERENCES rooms(id)
+        );
+    """)
+    # 种子数据
+    if c.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 0:
+        rooms = [("4018",4),("4028",4),("4058",4),("4068",4),("4088",4),
+                 ("5010",5),("5028",5),("5058",5),("5068",5),("5088",5),
+                 ("601",6),("602",6),("603",6),("605",6),("606",6),
+                 ("608",6),("609",6),("610",6),("611",6),("612",6)]
+        for num, fl in rooms:
+            c.execute("INSERT INTO rooms (room_number, floor) VALUES (?,?)", (num, fl))
+    conn.commit()
+    conn.close()
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, db: Session = Depends(get_db)):
-    login_required(request)
-    rooms = db.query(Room).all()
+
+# ── 辅助函数 ──
+
+def today():
+    return date.today().isoformat()
+
+def parse_date(d):
+    if isinstance(d, date):
+        return d
+    if isinstance(d, str):
+        return date.fromisoformat(d)
+    return d
+
+def month_range(d=None):
+    d = d or date.today()
+    ms = d.replace(day=1)
+    if d.month == 12:
+        me = d.replace(year=d.year+1, month=1, day=1) - timedelta(days=1)
+    else:
+        me = d.replace(month=d.month+1, day=1) - timedelta(days=1)
+    return ms, me
+
+def fmt_money(v):
+    return f"{v:,.0f}"
+
+def dict_from_row(row):
+    return dict(row) if row else {}
+
+# ── 初始化 ──
+init_db()
+
+# ── 导航 ──
+PAGES = ["📊 首页", "🚪 房间", "👤 租客", "📄 租约", "💰 收租", "⚡ 水电", "🔧 维修", "📈 报表"]
+if "page" not in st.session_state:
+    st.session_state.page = "📊 首页"
+
+# 顶部导航
+nav_html = '<div class="nav-tabs">'
+for p in PAGES:
+    active = "active" if st.session_state.page == p else ""
+    nav_html += f'<button class="nav-tab {active}" onclick="alert(\'nav_{p}\')">{p}</button>'
+nav_html += "</div>"
+st.markdown(nav_html, unsafe_allow_html=True)
+
+# 导航回调
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    if st.button("📊 首页", use_container_width=True, type="secondary" if st.session_state.page != "📊 首页" else "primary"):
+        st.session_state.page = "📊 首页"; st.rerun()
+with col2:
+    if st.button("🚪 房间", use_container_width=True, type="secondary" if st.session_state.page != "🚪 房间" else "primary"):
+        st.session_state.page = "🚪 房间"; st.rerun()
+with col3:
+    if st.button("👤 租客", use_container_width=True, type="secondary" if st.session_state.page != "👤 租客" else "primary"):
+        st.session_state.page = "👤 租客"; st.rerun()
+with col4:
+    if st.button("📄 租约", use_container_width=True, type="secondary" if st.session_state.page != "📄 租约" else "primary"):
+        st.session_state.page = "📄 租约"; st.rerun()
+with col5:
+    if st.button("💰 收租", use_container_width=True, type="secondary" if st.session_state.page != "💰 收租" else "primary"):
+        st.session_state.page = "💰 收租"; st.rerun()
+col6, col7, col8 = st.columns(3)
+with col6:
+    if st.button("⚡ 水电", use_container_width=True, type="secondary" if st.session_state.page != "⚡ 水电" else "primary"):
+        st.session_state.page = "⚡ 水电"; st.rerun()
+with col7:
+    if st.button("🔧 维修", use_container_width=True, type="secondary" if st.session_state.page != "🔧 维修" else "primary"):
+        st.session_state.page = "🔧 维修"; st.rerun()
+with col8:
+    if st.button("📈 报表", use_container_width=True, type="secondary" if st.session_state.page != "📈 报表" else "primary"):
+        st.session_state.page = "📈 报表"; st.rerun()
+
+st.divider()
+
+
+# ══════════════════════════════════════════════════════════
+#  1. 首页
+# ══════════════════════════════════════════════════════════
+
+if st.session_state.page == "📊 首页":
+    conn = get_conn()
+    rooms = conn.execute("SELECT * FROM rooms").fetchall()
     total = len(rooms)
-    occupied = sum(1 for r in rooms if r.status == "occupied")
+    occupied = sum(1 for r in rooms if r["status"] == "occupied")
     vacant = total - occupied
-    now = td()
-    ms = now.replace(day=1)
-    nm = now.replace(year=now.year+1, month=1, day=1) if now.month == 12 else now.replace(month=now.month+1, day=1)
-    expected = db.query(func.sum(RentPayment.amount)).filter(
-        RentPayment.status == "pending", RentPayment.period_start >= ms, RentPayment.period_start < nm).scalar() or 0
-    paid = db.query(func.sum(RentPayment.amount)).filter(
-        RentPayment.status == "paid", RentPayment.paid_date >= ms, RentPayment.paid_date < nm).scalar() or 0
-    wd = now + timedelta(days=7)
-    expiring = db.query(Tenancy).filter(Tenancy.status == "active", Tenancy.end_date <= wd, Tenancy.end_date >= now).all()
-    pending_r = db.query(Repair).filter(Repair.status == "pending").count()
+
+    ms, me = month_range()
+    pending = conn.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status='pending' AND period_start>=? AND period_start<=?",
+                           (ms.isoformat(), me.isoformat())).fetchone()[0]
+    paid_amt = conn.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status='paid' AND paid_date>=? AND paid_date<=?",
+                           (ms.isoformat(), me.isoformat())).fetchone()[0]
+    pending_r = conn.execute("SELECT COUNT(*) FROM repairs WHERE status='pending'").fetchone()[0]
+    expiring = conn.execute("""
+        SELECT t.*, r.room_number FROM tenancies t JOIN rooms r ON t.room_id=r.id
+        WHERE t.status='active' AND t.end_date IS NOT NULL
+        AND t.end_date <= ? AND t.end_date >= ?
+        ORDER BY t.end_date""",
+        ((date.today() + timedelta(days=7)).isoformat(), today())).fetchall()
+
+    st.markdown(f'<div style="background:linear-gradient(135deg,#1e40af,#3b82f6);color:white;border-radius:16px;padding:20px;margin-bottom:16px;">'
+                f'<div style="font-size:20px;font-weight:700;">🏠 出租屋管理站</div>'
+                f'<div style="font-size:13px;opacity:0.8;margin-top:4px;">{date.today().strftime("%Y年%m月%d日")}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+    # 统计
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#1e40af;">{total}</div><div style="font-size:12px;color:#9ca3af;">总房间</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#059669;">{occupied}</div><div style="font-size:12px;color:#9ca3af;">已出租</div></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="font-size:28px;font-weight:700;color:#d97706;">{vacant}</div><div style="font-size:12px;color:#9ca3af;">空房</div></div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'<span style="font-size:13px;color:#6b7280;">本月租金</span>'
+                f'<span><span style="color:#059669;font-weight:700;font-size:20px;">{fmt_money(paid_amt)}</span>'
+                f'<span style="color:#d1d5db;margin:0 4px;">/</span>'
+                f'<span style="font-weight:700;font-size:20px;">{fmt_money(paid_amt+pending)}</span>元</span>'
+                f'</div></div>', unsafe_allow_html=True)
+
+    # 到期提醒
+    if expiring:
+        st.markdown("### ⏰ 即将到期")
+        for e in expiring:
+            days = (date.fromisoformat(e["end_date"]) - date.today()).days
+            st.markdown(f'<div class="card" style="display:flex;justify-content:space-between;align-items:center;">'
+                        f'<span><b>{e["room_number"]}</b></span>'
+                        f'<span class="badge badge-yellow">剩 {days} 天</span></div>', unsafe_allow_html=True)
+
+    if pending_r:
+        st.markdown(f'<div class="card" style="display:flex;justify-content:space-between;align-items:center;border-left:3px solid #ef4444;">'
+                    f'<span>🔧 待处理维修</span><span class="badge badge-red">{pending_r} 项</span></div>', unsafe_allow_html=True)
+
+    conn.close()
+
+
+# ══════════════════════════════════════════════════════════
+#  2. 房间
+# ══════════════════════════════════════════════════════════
+
+elif st.session_state.page == "🚪 房间":
+    st.markdown("### 🚪 房间管理")
+    conn = get_conn()
+    rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
     floors = {}
     for r in rooms:
-        floors.setdefault(r.floor, []).append(r)
-    return render_html("dashboard.html", request, floors=sorted(floors.items()),
-                        total_rooms=total, occupied=occupied, vacant=vacant,
-                        expected_rent=expected, paid_rent=paid,
-                        expiring_leases=expiring, pending_repairs=pending_r)
+        floors.setdefault(r["floor"], []).append(r)
 
+    for fl in sorted(floors.keys()):
+        st.markdown(f"<div style='font-size:14px;font-weight:600;color:#374151;margin:8px 0 4px;'>{fl}F</div>", unsafe_allow_html=True)
+        cols = st.columns(5)
+        for i, room in enumerate(floors[fl]):
+            with cols[i % 5]:
+                cls = "occupied" if room["status"] == "occupied" else "vacant"
+                st.markdown(f'<div class="room-cell {cls}" onclick="alert(\'room_{room["id"]}\')">'
+                            f'{room["room_number"]}<br><span style="font-size:10px;">{"●" if room["status"]=="occupied" else "○"}</span>'
+                            f'</div>', unsafe_allow_html=True)
 
-# ── 房间 ──
+    st.markdown("---")
+    st.markdown("#### 房间详情")
+    room_ids = {f"{r['floor']}F {r['room_number']}": r["id"] for r in rooms}
+    sel = st.selectbox("选择房间", list(room_ids.keys()), key="room_select")
+    rid = room_ids[sel]
+    room = conn.execute("SELECT * FROM rooms WHERE id=?", (rid,)).fetchone()
 
-@app.get("/rooms", response_class=HTMLResponse)
-def rooms_page(request: Request, db: Session = Depends(get_db)):
-    login_required(request)
-    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
-    floors = {}
-    for r in rooms:
-        floors.setdefault(r.floor, []).append(r)
-    return render_html("rooms.html", request, floors=sorted(floors.items()))
-
-
-@app.get("/rooms/{room_id}", response_class=HTMLResponse)
-def room_detail(request: Request, room_id: int, db: Session = Depends(get_db)):
-    login_required(request)
-    room = db.query(Room).get(room_id)
-    if not room:
-        raise HTTPException(404)
-    tenancy = room.current_tenancy()
-    bills = db.query(UtilityBill).filter_by(room_id=room_id).order_by(UtilityBill.month.desc()).limit(12).all()
-    repairs = db.query(Repair).filter_by(room_id=room_id).order_by(Repair.reported_date.desc()).all()
-    return render_html("room_detail.html", request, room=room, tenancy=tenancy, bills=bills, repairs=repairs)
-
-
-@app.post("/rooms/{room_id}/rent")
-def update_rent(room_id: int, monthly_rent: float = Form(...), db: Session = Depends(get_db)):
-    room = db.query(Room).get(room_id)
     if room:
-        room.monthly_rent = monthly_rent
-        db.commit()
-    return RedirectResponse(f"/rooms/{room_id}", status_code=303)
+        st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;">'
+                    f'<span style="font-size:18px;font-weight:700;">{room["room_number"]}</span>'
+                    f'<span class="badge {"badge-green" if room["status"]=="occupied" else "badge-gray"}">'
+                    f'{"已租" if room["status"]=="occupied" else "空房"}</span></div>', unsafe_allow_html=True)
+
+        rent = st.number_input("月租(元)", value=room["monthly_rent"], step=50, key="room_rent")
+        if st.button("保存房租", key="save_rent", use_container_width=True):
+            conn.execute("UPDATE rooms SET monthly_rent=? WHERE id=?", (rent, rid))
+            conn.commit()
+            st.success("已保存")
+            st.rerun()
+
+        # 当前租约
+        tenancy = conn.execute("""
+            SELECT t.*, GROUP_CONCAT(tn.name,', ') as tenant_names
+            FROM tenancies t
+            LEFT JOIN tenant_links tl ON tl.tenancy_id=t.id
+            LEFT JOIN tenants tn ON tn.id=tl.tenant_id
+            WHERE t.room_id=? AND t.status='active'
+            GROUP BY t.id""", (rid,)).fetchone()
+        if tenancy:
+            st.markdown("**当前租客:** " + (tenancy["tenant_names"] or "—"))
+            st.caption(f"月租{fmt_money(tenancy['monthly_rent'])}元 | 押金{fmt_money(tenancy['deposit'])}元 | {tenancy['lease_type']}")
+        conn.close()
 
 
-# ── 租客 ──
+# ══════════════════════════════════════════════════════════
+#  3. 租客
+# ══════════════════════════════════════════════════════════
 
-@app.get("/tenants", response_class=HTMLResponse)
-def tenants_page(request: Request, q: str = "", db: Session = Depends(get_db)):
-    login_required(request)
-    query = db.query(Tenant).order_by(Tenant.created_at.desc())
-    if q:
-        query = query.filter(Tenant.name.contains(q) | Tenant.phone.contains(q))
-    return render_html("tenants.html", request, tenants=query.all(), q=q)
+elif st.session_state.page == "👤 租客":
+    st.markdown("### 👤 租客管理")
+    conn = get_conn()
+    tenants = conn.execute("SELECT * FROM tenants ORDER BY id DESC").fetchall()
 
+    with st.expander("➕ 新增租客", expanded=not tenants):
+        with st.form("tenant_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                name = st.text_input("姓名*")
+            with c2:
+                phone = st.text_input("电话")
+            id_no = st.text_input("身份证号")
+            if st.form_submit_button("保存", use_container_width=True, type="primary"):
+                if name:
+                    conn.execute("INSERT INTO tenants (name, id_number, phone) VALUES (?,?,?)", (name, id_no, phone))
+                    conn.commit()
+                    st.success(f"已添加{name}")
+                    st.rerun()
 
-@app.get("/tenants/create", response_class=HTMLResponse)
-def tenant_create_page(request: Request):
-    login_required(request)
-    return render_html("tenant_form.html", request, tenant=None)
-
-
-@app.post("/tenants/create")
-def tenant_create(request: Request, name: str = Form(...), id_number: str = Form(""),
-                  phone: str = Form(""), db: Session = Depends(get_db)):
-    login_required(request)
-    db.add(Tenant(name=name, id_number=id_number, phone=phone))
-    db.commit()
-    return RedirectResponse("/tenants", status_code=303)
-
-
-# ── 租约 ──
-
-@app.get("/leases", response_class=HTMLResponse)
-def leases_page(request: Request, status: str = "active", db: Session = Depends(get_db)):
-    login_required(request)
-    query = db.query(Tenancy).order_by(Tenancy.start_date.desc())
-    if status != "all":
-        query = query.filter(Tenancy.status == status)
-    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
-    tenants = db.query(Tenant).order_by(Tenant.name).all()
-    return render_html("leases.html", request, leases=query.all(), rooms=rooms, tenants=tenants, status=status)
-
-
-@app.post("/leases/create")
-def lease_create(request: Request, room_id: int = Form(...), tenant_ids: str = Form(...),
-                 lease_type: str = Form("monthly"), monthly_rent: float = Form(...),
-                 deposit: float = Form(...), deposit_paid: bool = Form(False),
-                 start_date: str = Form(...), end_date: str = Form(""), notes: str = Form(""),
-                 db: Session = Depends(get_db)):
-    login_required(request)
-    ids = [int(x) for x in tenant_ids.split(",") if x.strip()]
-    tenancy = Tenancy(room_id=room_id, lease_type=lease_type, monthly_rent=monthly_rent,
-                      deposit=deposit, deposit_paid=deposit_paid,
-                      start_date=date.fromisoformat(start_date),
-                      end_date=date.fromisoformat(end_date) if end_date else None, notes=notes)
-    db.add(tenancy)
-    db.flush()
-    for tid in ids:
-        db.add(TenantTenancy(tenancy_id=tenancy.id, tenant_id=tid))
-    room = db.query(Room).get(room_id)
-    if room:
-        room.status = "occupied"
-        room.monthly_rent = monthly_rent
-    db.commit()
-    return RedirectResponse("/leases", status_code=303)
+    for t in tenants:
+        links = conn.execute("""
+            SELECT r.room_number, t2.lease_type FROM tenant_links tl
+            JOIN tenancies t2 ON t2.id=tl.tenancy_id
+            JOIN rooms r ON r.id=t2.room_id
+            WHERE tl.tenant_id=? AND t2.status='active'""", (t["id"],)).fetchall()
+        rooms_str = ", ".join([f"{l['room_number']}({l['lease_type']})" for l in links]) or "无"
+        st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;">'
+                    f'<div><b>{t["name"]}</b><br><span style="font-size:12px;color:#9ca3af;">{t["phone"] or "—"}</span></div>'
+                    f'<div style="text-align:right;font-size:12px;color:#6b7280;">{rooms_str}</div>'
+                    f'</div></div>', unsafe_allow_html=True)
+    conn.close()
 
 
-@app.post("/leases/{lease_id}/terminate")
-def lease_terminate(lease_id: int, db: Session = Depends(get_db)):
-    tenancy = db.query(Tenancy).get(lease_id)
-    if tenancy:
-        tenancy.status = "terminated"
-        tenancy.end_date = td()
-        room = tenancy.room
-        if room:
-            room.status = "vacant"
-        db.commit()
-    return RedirectResponse("/leases", status_code=303)
+# ══════════════════════════════════════════════════════════
+#  4. 租约
+# ══════════════════════════════════════════════════════════
+
+elif st.session_state.page == "📄 租约":
+    st.markdown("### 📄 租约管理")
+    conn = get_conn()
+
+    tab1, tab2 = st.tabs(["📋 租约列表", "➕ 新建租约"])
+
+    with tab2:
+        rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
+        tenants = conn.execute("SELECT * FROM tenants ORDER BY name").fetchall()
+        with st.form("lease_form"):
+            room_opts = {f"{r['floor']}F {r['room_number']}": r["id"] for r in rooms}
+            rid = st.selectbox("房间", list(room_opts.keys()))
+            tenant_sel = st.multiselect("租客", [t["name"] for t in tenants])
+            c1, c2 = st.columns(2)
+            with c1:
+                lt = st.selectbox("租赁类型", ["monthly", "yearly", "weekly"],
+                                  format_func=lambda x: {"monthly":"月租","yearly":"年租","weekly":"周租"}[x])
+            with c2:
+                mrent = st.number_input("月租金(元)", min_value=0, step=100)
+            c3, c4 = st.columns(2)
+            with c3:
+                dep = st.number_input("押金(元)", min_value=0, step=100)
+            with c4:
+                dep_paid = st.checkbox("押金已付")
+            sd = st.date_input("开始日期", date.today())
+            ed = st.date_input("结束日期(选填)", value=None)
+            notes = st.text_area("备注")
+            if st.form_submit_button("创建租约", use_container_width=True, type="primary"):
+                if not tenant_sel:
+                    st.error("请选择至少一个租客")
+                else:
+                    cur = conn.execute("INSERT INTO tenancies (room_id, lease_type, monthly_rent, deposit, deposit_paid, start_date, end_date, notes) VALUES (?,?,?,?,?,?,?,?)",
+                                       (room_opts[rid], lt, mrent, dep, int(dep_paid), sd.isoformat(), ed.isoformat() if ed else None, notes))
+                    tid = cur.lastrowid
+                    for tn in tenant_sel:
+                        t = conn.execute("SELECT id FROM tenants WHERE name=?", (tn,)).fetchone()
+                        if t:
+                            conn.execute("INSERT INTO tenant_links (tenancy_id, tenant_id) VALUES (?,?)", (tid, t["id"]))
+                    conn.execute("UPDATE rooms SET status='occupied', monthly_rent=? WHERE id=?", (mrent, room_opts[rid]))
+                    conn.commit()
+                    st.success("租约已创建")
+                    st.rerun()
+
+    with tab1:
+        status_filter = st.selectbox("状态", ["active", "expired", "terminated", "all"],
+                                     format_func=lambda x: {"active":"生效中","expired":"已到期","terminated":"已终止","all":"全部"}[x])
+        query = "SELECT t.*, r.room_number, GROUP_CONCAT(tn.name,', ') as tenant_names FROM tenancies t JOIN rooms r ON r.id=t.room_id LEFT JOIN tenant_links tl ON tl.tenancy_id=t.id LEFT JOIN tenants tn ON tn.id=tl.tenant_id"
+        if status_filter != "all":
+            query += f" WHERE t.status='{status_filter}'"
+        query += " GROUP BY t.id ORDER BY t.start_date DESC"
+        leases = conn.execute(query).fetchall()
+
+        for l in leases:
+            nd = f"到期: {l['end_date']}" if l["end_date"] else "未设到期"
+            with st.container(border=True):
+                st.markdown(f"**{l['room_number']}** {' | ' + l['tenant_names'] if l['tenant_names'] else ''}")
+                c1, c2, c3 = st.columns(3)
+                c1.caption(f"💰 {fmt_money(l['monthly_rent'])}/月")
+                c2.caption(f"🏷️ {l['lease_type']}")
+                c3.caption(f"📅 {nd}")
+                if l["status"] == "active" and l["end_date"]:
+                    days = (date.fromisoformat(l["end_date"]) - date.today()).days
+                    if days <= 7:
+                        st.warning(f"⚠️ 距到期还有 {days} 天")
+                if l["status"] == "active":
+                    if st.button(f"终止 #{l['id']}", key=f"term_{l['id']}", use_container_width=True):
+                        conn.execute("UPDATE tenancies SET status='terminated', end_date=? WHERE id=?", (today(), l["id"]))
+                        conn.execute("UPDATE rooms SET status='vacant' WHERE id=?", (l["room_id"],))
+                        conn.commit()
+                        st.rerun()
+    conn.close()
 
 
-# ── 租金 ──
+# ══════════════════════════════════════════════════════════
+#  5. 收租
+# ══════════════════════════════════════════════════════════
 
-@app.get("/payments", response_class=HTMLResponse)
-def payments_page(request: Request, status: str = "pending", month: str = "", db: Session = Depends(get_db)):
-    login_required(request)
-    query = db.query(RentPayment).order_by(RentPayment.period_start.desc())
-    if status != "all":
-        query = query.filter(RentPayment.status == status)
-    if month:
-        query = query.filter(RentPayment.period_start.startswith(f"{month}-"))
-    leases = db.query(Tenancy).filter_by(status="active").all()
-    return render_html("payments.html", request, payments=query.all(), leases=leases, status=status, month=month)
+elif st.session_state.page == "💰 收租":
+    st.markdown("### 💰 租金管理")
+    conn = get_conn()
 
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📥 一键生成本月账单", use_container_width=True):
+            ms, me = month_range()
+            active = conn.execute("SELECT * FROM tenancies WHERE status='active'").fetchall()
+            created = 0
+            for l in active:
+                exists = conn.execute("SELECT id FROM payments WHERE tenancy_id=? AND period_start=?",
+                                      (l["id"], ms.isoformat())).fetchone()
+                if not exists:
+                    conn.execute("INSERT INTO payments (tenancy_id, period_start, period_end, amount, status) VALUES (?,?,?,?,?)",
+                                 (l["id"], ms.isoformat(), me.isoformat(), l["monthly_rent"], "pending"))
+                    created += 1
+            conn.commit()
+            st.success(f"已生成 {created} 条账单")
+            st.rerun()
 
-@app.post("/payments/create")
-def payment_create(request: Request, tenancy_id: int = Form(...),
-                   period_start: str = Form(...), period_end: str = Form(...),
-                   amount: float = Form(...), paid: bool = Form(False), db: Session = Depends(get_db)):
-    login_required(request)
-    p = RentPayment(tenancy_id=tenancy_id, period_start=date.fromisoformat(period_start),
-                    period_end=date.fromisoformat(period_end), amount=amount,
-                    status="paid" if paid else "pending", paid_date=td() if paid else None)
-    db.add(p)
-    db.flush()
-    if paid:
-        get_or_create_tx(db, p)
-    db.commit()
-    return RedirectResponse("/payments", status_code=303)
+    sf = st.selectbox("筛选", ["pending", "paid", "overdue", "all"],
+                      format_func=lambda x: {"pending":"待收","paid":"已收","overdue":"逾期","all":"全部"}[x])
+    query = """SELECT p.*, r.room_number, GROUP_CONCAT(tn.name,', ') as tenant_names
+               FROM payments p JOIN tenancies t ON t.id=p.tenancy_id
+               JOIN rooms r ON r.id=t.room_id
+               LEFT JOIN tenant_links tl ON tl.tenancy_id=t.id
+               LEFT JOIN tenants tn ON tn.id=tl.tenant_id"""
+    if sf != "all":
+        query += f" WHERE p.status='{sf}'"
+    query += " GROUP BY p.id ORDER BY p.period_start DESC LIMIT 50"
+    payments = conn.execute(query).fetchall()
 
+    # 快速统计
+    paid_sum = sum(p["amount"] for p in payments if p["status"] == "paid")
+    pending_sum = sum(p["amount"] for p in payments if p["status"] == "pending")
+    st.markdown(f'<div style="display:flex;gap:8px;margin-bottom:8px;">'
+                f'<div class="card" style="flex:1;text-align:center;"><div style="color:#059669;font-size:20px;font-weight:700;">{fmt_money(paid_sum)}</div><div style="font-size:11px;color:#9ca3af;">已收</div></div>'
+                f'<div class="card" style="flex:1;text-align:center;"><div style="color:#dc2626;font-size:20px;font-weight:700;">{fmt_money(pending_sum)}</div><div style="font-size:11px;color:#9ca3af;">待收</div></div>'
+                f'</div>', unsafe_allow_html=True)
 
-@app.post("/payments/{pid}/pay")
-def payment_pay(pid: int, db: Session = Depends(get_db)):
-    p = db.query(RentPayment).get(pid)
-    if p:
-        p.status = "paid"
-        p.paid_date = td()
-        get_or_create_tx(db, p)
-        db.commit()
-    return RedirectResponse("/payments", status_code=303)
-
-
-@app.post("/payments/{pid}/unpay")
-def payment_unpay(pid: int, db: Session = Depends(get_db)):
-    p = db.query(RentPayment).get(pid)
-    if p:
-        p.status = "pending"
-        p.paid_date = None
-        db.query(Transaction).filter_by(related_payment_id=pid).delete()
-        db.commit()
-    return RedirectResponse("/payments", status_code=303)
-
-
-@app.get("/payments/batch")
-def batch_payment(request: Request, db: Session = Depends(get_db)):
-    login_required(request)
-    now = td()
-    ms = now.replace(day=1)
-    nm = now.replace(year=now.year+1, month=1, day=1) if now.month == 12 else now.replace(month=now.month+1, day=1)
-    created = skipped = 0
-    for lease in db.query(Tenancy).filter_by(status="active").all():
-        if db.query(RentPayment).filter(RentPayment.tenancy_id == lease.id, RentPayment.period_start == ms).first():
-            skipped += 1
-            continue
-        db.add(RentPayment(tenancy_id=lease.id, period_start=ms, period_end=nm - timedelta(days=1),
-                           amount=lease.monthly_rent, status="pending"))
-        created += 1
-    db.commit()
-    return JSONResponse({"created": created, "skipped": skipped})
+    for p in payments:
+        with st.container(border=True):
+            st.markdown(f"**{p['room_number']}** {p['tenant_names'] or ''}")
+            st.caption(f"{p['period_start']} ~ {p['period_end']}  |  {fmt_money(p['amount'])}元")
+            if p["status"] == "pending":
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(f"✅ 标记已收 #{p['id']}", key=f"pay_{p['id']}", use_container_width=True):
+                        conn.execute("UPDATE payments SET status='paid', paid_date=? WHERE id=?", (today(), p["id"]))
+                        conn.execute("INSERT INTO transactions (tx_type, category, amount, tx_date, description, room_id) VALUES (?,?,?,?,?,?)",
+                                     ("income", "rent", p["amount"], today(),
+                                      f"租金 {p['room_number']} ({p['period_start']}~{p['period_end']})",
+                                      p["room_id"] if "room_id" in p.keys() else None))
+                        conn.commit()
+                        st.rerun()
+                with c2:
+                    st.markdown(f'<span class="badge badge-yellow">待收</span>', unsafe_allow_html=True)
+            elif p["status"] == "paid":
+                st.markdown(f'<span class="badge badge-green">已收 {p["paid_date"]}</span>', unsafe_allow_html=True)
+    conn.close()
 
 
-# ── 水电 ──
+# ══════════════════════════════════════════════════════════
+#  6. 水电
+# ══════════════════════════════════════════════════════════
 
-@app.get("/utilities", response_class=HTMLResponse)
-def utilities_page(request: Request, month: str = "", db: Session = Depends(get_db)):
-    login_required(request)
-    query = db.query(UtilityBill).order_by(UtilityBill.month.desc())
-    if month:
-        query = query.filter(UtilityBill.month == month)
-    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
-    months = [m[0] for m in db.query(UtilityBill.month).distinct().order_by(UtilityBill.month.desc()).all()]
-    return render_html("utilities.html", request, bills=query.all(), rooms=rooms, months=months, current_month=month)
+elif st.session_state.page == "⚡ 水电":
+    st.markdown("### ⚡ 水电费管理")
+    conn = get_conn()
+    rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
 
+    st.info("💡 电费 1元/度 | 水费 70元/人/月")
+    with st.expander("➕ 抄表录入"):
+        with st.form("utility_form"):
+            room_opts = {f"{r['floor']}F {r['room_number']}": r["id"] for r in rooms}
+            rid = st.selectbox("房间", list(room_opts.keys()))
+            mth = st.text_input("月份(YYYY-MM)", value=date.today().strftime("%Y-%m"))
+            c1, c2 = st.columns(2)
+            with c1:
+                elec_read = st.number_input("电表读数", step=0.1)
+            with c2:
+                elec_usage = st.number_input("用电量(度)", step=0.1)
+            tc = st.number_input("本月租客人数", min_value=0, max_value=4, step=1)
+            if st.form_submit_button("保存", use_container_width=True, type="primary"):
+                ec = elec_usage * 1.0
+                wc = tc * 70
+                conn.execute("INSERT INTO utility_bills (room_id, month, electricity_reading, electricity_usage, electricity_cost, tenant_count, water_cost, total) VALUES (?,?,?,?,?,?,?,?)",
+                             (room_opts[rid], mth, elec_read, elec_usage, ec, tc, wc, ec + wc))
+                conn.commit()
+                st.success("已保存")
+                st.rerun()
 
-@app.post("/utilities/create")
-def utility_create(request: Request, room_id: int = Form(...), month: str = Form(...),
-                   electricity_reading: float = Form(0), electricity_usage: float = Form(0),
-                   tenant_count: int = Form(0), db: Session = Depends(get_db)):
-    login_required(request)
-    ec = electricity_usage * 1.0
-    wc = tenant_count * 70
-    db.add(UtilityBill(room_id=room_id, month=month, electricity_reading=electricity_reading,
-                       electricity_usage=electricity_usage, electricity_cost=ec,
-                       tenant_count=tenant_count, water_cost=wc, total=ec + wc))
-    db.commit()
-    return RedirectResponse("/utilities", status_code=303)
-
-
-@app.post("/utilities/{bid}/pay")
-def utility_pay(bid: int, db: Session = Depends(get_db)):
-    bill = db.query(UtilityBill).get(bid)
-    if bill:
-        bill.paid = True
-        bill.paid_date = td()
-        db.add(Transaction(tx_type="income", category="electricity" if bill.electricity_cost > 0 else "water",
-                           amount=bill.total, tx_date=td(),
-                           description=f"水电费 {bill.room.room_number} ({bill.month})", room_id=bill.room_id))
-        db.commit()
-    return RedirectResponse("/utilities", status_code=303)
-
-
-# ── 维修 ──
-
-@app.get("/repairs", response_class=HTMLResponse)
-def repairs_page(request: Request, status: str = "all", db: Session = Depends(get_db)):
-    login_required(request)
-    query = db.query(Repair).order_by(Repair.reported_date.desc())
-    if status != "all":
-        query = query.filter(Repair.status == status)
-    rooms = db.query(Room).order_by(Room.floor, Room.room_number).all()
-    return render_html("repairs.html", request, repairs=query.all(), rooms=rooms, status=status)
-
-
-@app.post("/repairs/create")
-def repair_create(request: Request, room_id: int = Form(...), description: str = Form(...),
-                  cost: float = Form(0), db: Session = Depends(get_db)):
-    login_required(request)
-    db.add(Repair(room_id=room_id, description=description, reported_date=td(), cost=cost))
-    db.commit()
-    return RedirectResponse("/repairs", status_code=303)
+    bills = conn.execute("""SELECT u.*, r.room_number FROM utility_bills u JOIN rooms r ON r.id=u.room_id
+                            ORDER BY u.month DESC LIMIT 50""").fetchall()
+    for b in bills:
+        with st.container(border=True):
+            st.markdown(f"**{b['room_number']}**  {b['month']}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.caption(f"⚡{fmt_money(b['electricity_usage'])}度")
+            c2.caption(f"💧{fmt_money(b['water_cost'])}元")
+            c3.caption(f"💰合计{fmt_money(b['total'])}元")
+            if b["paid"]:
+                c4.markdown(f'<span class="badge badge-green">已缴</span>', unsafe_allow_html=True)
+            else:
+                if c4.button(f"标记已缴 #{b['id']}", key=f"util_{b['id']}", use_container_width=True):
+                    conn.execute("UPDATE utility_bills SET paid=1, paid_date=? WHERE id=?", (today(), b["id"]))
+                    conn.execute("INSERT INTO transactions (tx_type, category, amount, tx_date, description, room_id) VALUES (?,?,?,?,?,?)",
+                                 ("income", "electricity", b["total"], today(), f"水电 {b['room_number']}({b['month']})", b["room_id"]))
+                    conn.commit()
+                    st.rerun()
+    conn.close()
 
 
-@app.post("/repairs/{rid}/complete")
-def repair_complete(rid: int, cost: float = Form(0), notes: str = Form(""), db: Session = Depends(get_db)):
-    r = db.query(Repair).get(rid)
-    if r:
-        r.status = "completed"
-        r.completed_date = td()
-        r.cost = cost
-        r.notes = notes
-        if cost > 0:
-            db.add(Transaction(tx_type="expense", category="repair", amount=cost, tx_date=td(),
-                               description=f"维修 {r.room.room_number}: {r.description}", room_id=r.room_id))
-        db.commit()
-    return RedirectResponse("/repairs", status_code=303)
+# ══════════════════════════════════════════════════════════
+#  7. 维修
+# ══════════════════════════════════════════════════════════
+
+elif st.session_state.page == "🔧 维修":
+    st.markdown("### 🔧 维修报修")
+    conn = get_conn()
+    rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
+
+    with st.expander("➕ 报修"):
+        with st.form("repair_form"):
+            room_opts = {f"{r['floor']}F {r['room_number']}": r["id"] for r in rooms}
+            rid = st.selectbox("房间", list(room_opts.keys()))
+            desc = st.text_area("问题描述")
+            est_cost = st.number_input("预计费用(元)", step=10)
+            if st.form_submit_button("提交", use_container_width=True, type="primary"):
+                conn.execute("INSERT INTO repairs (room_id, description, reported_date, cost) VALUES (?,?,?,?)",
+                             (room_opts[rid], desc, today(), est_cost))
+                conn.commit()
+                st.success("已提交")
+                st.rerun()
+
+    sf = st.selectbox("状态", ["pending", "completed", "all"],
+                      format_func=lambda x: {"pending":"待处理","completed":"已完成","all":"全部"}[x])
+    query = "SELECT r.*, rm.room_number FROM repairs r JOIN rooms rm ON rm.id=r.room_id"
+    if sf != "all":
+        query += f" WHERE r.status='{sf}'"
+    query += " ORDER BY r.reported_date DESC"
+    repairs = conn.execute(query).fetchall()
+
+    for r in repairs:
+        with st.container(border=True):
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"**{r['room_number']}** | {r['description']}")
+                st.caption(f"报修: {r['reported_date']} | 费用: {fmt_money(r['cost'])}元")
+            with c2:
+                if r["status"] == "pending":
+                    if st.button(f"✅ 完成 #{r['id']}", key=f"rep_{r['id']}", use_container_width=True):
+                        conn.execute("UPDATE repairs SET status='completed', completed_date=? WHERE id=?", (today(), r["id"]))
+                        conn.commit()
+                        st.rerun()
+                    st.markdown(f'<span class="badge badge-yellow">待处理</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<span class="badge badge-green">已完成</span>', unsafe_allow_html=True)
+    conn.close()
 
 
-# ── 财务报表 ──
+# ══════════════════════════════════════════════════════════
+#  8. 报表
+# ══════════════════════════════════════════════════════════
 
-@app.get("/finance", response_class=HTMLResponse)
-def finance_page(request: Request, year: int = 0, db: Session = Depends(get_db)):
-    login_required(request)
-    if not year:
-        year = td().year
+elif st.session_state.page == "📈 报表":
+    st.markdown("### 📈 财务报表")
+    conn = get_conn()
+
+    year = st.selectbox("年份", range(date.today().year, 2023, -1), index=0)
+
     monthly = []
     for m in range(1, 13):
         ms = f"{year}-{m:02d}"
-        inc = db.query(func.sum(Transaction.amount)).filter(
-            Transaction.tx_type == "income", func.strftime("%Y-%m", Transaction.tx_date) == ms).scalar() or 0
-        exp = db.query(func.sum(Transaction.amount)).filter(
-            Transaction.tx_type == "expense", func.strftime("%Y-%m", Transaction.tx_date) == ms).scalar() or 0
-        monthly.append({"month": MONTH_NAMES[m-1], "income": inc, "expense": exp, "profit": inc - exp})
-    ys = str(year)
-    ti = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.tx_type == "income", func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
-    te = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.tx_type == "expense", func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
-    ri = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.tx_type == "income", Transaction.category == "rent",
-        func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
-    ui = db.query(func.sum(Transaction.amount)).filter(
-        Transaction.tx_type == "income", Transaction.category.in_(["electricity", "water"]),
-        func.strftime("%Y", Transaction.tx_date) == ys).scalar() or 0
-    years = [r[0] for r in db.query(func.strftime("%Y", Transaction.tx_date)).distinct().order_by(
-        func.strftime("%Y", Transaction.tx_date).desc()).all()]
-    return render_html("finance.html", request, year=year, years=years, monthly_data=monthly,
-                        total_income=ti, total_expense=te, total_profit=ti - te,
-                        rent_income=ri, utility_income=ui)
+        inc = conn.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE tx_type='income' AND strftime('%Y-%m',tx_date)=?", (ms,)).fetchone()[0]
+        exp = conn.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE tx_type='expense' AND strftime('%Y-%m',tx_date)=?", (ms,)).fetchone()[0]
+        monthly.append({"month": f"{m}月", "income": inc, "expense": exp, "profit": inc - exp})
+
+    m_names = [m["month"] for m in monthly]
+    incomes = [m["income"] for m in monthly]
+    expenses = [m["expense"] for m in monthly]
+
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="收入", x=m_names, y=incomes, marker_color="#22c55e"))
+    fig.add_trace(go.Bar(name="支出", x=m_names, y=expenses, marker_color="#ef4444"))
+    fig.update_layout(barmode="group", height=250, margin=dict(l=10, r=10, t=20, b=10),
+                      font=dict(size=11), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+
+    yr = str(year)
+    ti = conn.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE tx_type='income' AND strftime('%Y',tx_date)=?", (yr,)).fetchone()[0]
+    te = conn.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE tx_type='expense' AND strftime('%Y',tx_date)=?", (yr,)).fetchone()[0]
+    ri = conn.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE tx_type='income' AND category='rent' AND strftime('%Y',tx_date)=?", (yr,)).fetchone()[0]
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="color:#059669;font-size:20px;font-weight:700;">{fmt_money(ti)}</div><div style="font-size:11px;color:#9ca3af;">总收入</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="color:#dc2626;font-size:20px;font-weight:700;">{fmt_money(te)}</div><div style="font-size:11px;color:#9ca3af;">总支出</div></div>', unsafe_allow_html=True)
+    with c3:
+        st.markdown(f'<div class="card" style="text-align:center;"><div style="color:#1e40af;font-size:20px;font-weight:700;">{fmt_money(ti-te)}</div><div style="font-size:11px;color:#9ca3af;">净利润</div></div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="card"><div style="display:flex;justify-content:space-between;font-size:14px;">'
+                f'<span>租金收入</span><span style="font-weight:700;color:#059669;">{fmt_money(ri)}元</span></div>'
+                f'<div style="display:flex;justify-content:space-between;font-size:14px;margin-top:6px;">'
+                f'<span>其他收入</span><span style="font-weight:700;color:#059669;">{fmt_money(ti-ri)}元</span></div>'
+                f'</div>', unsafe_allow_html=True)
+
+    # 月度明细
+    st.markdown("#### 月度明细")
+    for m in monthly:
+        color = "text-green-600" if m["profit"] >= 0 else "text-red-600"
+        st.markdown(f'<div class="card" style="display:flex;justify-content:space-between;font-size:13px;padding:10px;">'
+                    f'<span style="font-weight:500;">{m["month"]}</span>'
+                    f'<span><span style="color:#059669;">+{fmt_money(m["income"])}</span>'
+                    f' <span style="color:#dc2626;">-{fmt_money(m["expense"])}</span>'
+                    f' <span style="color:#1e40af;font-weight:600;">{fmt_money(m["profit"])}</span></span>'
+                    f'</div>', unsafe_allow_html=True)
+    conn.close()
 
 
-# ── 账单导出 ──
-
-@app.get("/export/{payment_id}", response_class=HTMLResponse)
-def export_bill(request: Request, payment_id: int, db: Session = Depends(get_db)):
-    login_required(request)
-    payment = db.query(RentPayment).get(payment_id)
-    if not payment:
-        raise HTTPException(404)
-    return render_html("bill.html", request, p=payment)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+# ── 页脚 ──
+st.markdown('<div class="mb-safe"></div>', unsafe_allow_html=True)
+st.caption("🏠 出租屋管理站 v1.0 | 数据本地存储")
