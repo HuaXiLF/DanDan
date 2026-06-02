@@ -482,6 +482,8 @@ elif st.session_state.page == "🚪 房间":
 # ══════════════════════════════════════════════════════════
 
 elif st.session_state.page == "👤 租客":
+    if st.button("← 返回首页", key="back_home_tenants", use_container_width=True, type="secondary"):
+        st.session_state.page = "📊 首页"; st.rerun()
     st.markdown("### 👤 租客管理")
     conn = get_conn()
     tenants = conn.execute("SELECT * FROM tenants ORDER BY id DESC").fetchall()
@@ -664,6 +666,8 @@ elif st.session_state.page == "💰 收租":
 # ══════════════════════════════════════════════════════════
 
 elif st.session_state.page == "⚡ 水电":
+    if st.button("← 返回首页", key="back_home_util", use_container_width=True, type="secondary"):
+        st.session_state.page = "📊 首页"; st.rerun()
     st.markdown("### ⚡ 水电费管理")
     conn = get_conn()
     rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
@@ -715,6 +719,8 @@ elif st.session_state.page == "⚡ 水电":
 # ══════════════════════════════════════════════════════════
 
 elif st.session_state.page == "🔧 维修":
+    if st.button("← 返回首页", key="back_home_repair", use_container_width=True, type="secondary"):
+        st.session_state.page = "📊 首页"; st.rerun()
     st.markdown("### 🔧 维修报修")
     conn = get_conn()
     rooms = conn.execute("SELECT * FROM rooms ORDER BY floor, room_number").fetchall()
